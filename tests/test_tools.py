@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from looni_build.core.tools import TOOLS, TOOLS_BY_KEY, Tool, get_tool
+from mythix_build_system.core.tools import TOOLS, TOOLS_BY_KEY, Tool, get_tool
 
 
 def test_tool_keys_are_unique() -> None:

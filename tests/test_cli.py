@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from looni_build import __version__
-from looni_build.cli import main
+from mythix_build_system import __version__
+from mythix_build_system.cli import main
 
 
 def test_version_subcommand() -> None:
@@ -22,7 +22,7 @@ def test_help() -> None:
     runner = CliRunner()
     result = runner.invoke(main, ["--help"])
     assert result.exit_code == 0
-    assert "looni-build" in result.output
+    assert "mythix-build" in result.output
     assert "launch" in result.output
     assert "doctor" in result.output
 
@@ -45,7 +45,7 @@ def test_launch_unknown_tool(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_build_unknown_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`looni build` rejects unknown tool keys before spawning a TUI."""
+    """`mythix build` rejects unknown tool keys before spawning a TUI."""
     runner = CliRunner()
     result = runner.invoke(main, ["build", "totally-fake-tool"])
     assert result.exit_code == 2
@@ -63,10 +63,10 @@ def test_doctor_runs(
     monkeypatch: pytest.MonkeyPatch,
     fake_source_tree: Path,
 ) -> None:
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-doctor")
     runner = CliRunner()
     result = runner.invoke(main, ["doctor"])
     assert result.exit_code == 0
-    assert "looni-build doctor" in result.output
+    assert "mythix-build doctor" in result.output
     assert str(fake_source_tree) in result.output

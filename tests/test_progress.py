@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from looni_build.tui.progress import (
+from mythix_build_system.tui.progress import (
     EventKind,
     ProgressState,
     parse_line,

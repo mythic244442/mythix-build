@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from looni_build.core import TOOLS
-from looni_build.tui import LauncherApp
+from mythix_build_system.core import TOOLS
+from mythix_build_system.tui import LauncherApp
 
 
 @pytest.mark.asyncio
@@ -18,7 +18,7 @@ async def test_launcher_composes(
     """The app mounts banner, subtitle, and menu with all tools enabled."""
     from textual.widgets import OptionList, Static
 
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     app = LauncherApp()
@@ -29,7 +29,7 @@ async def test_launcher_composes(
         subtitle = app.query_one("#subtitle", Static)
         menu = app.query_one("#menu", OptionList)
 
-        assert "looni-build" in str(subtitle.renderable)
+        assert "mythix-build" in str(subtitle.renderable)
         assert "⣀⡀" in str(banner.renderable)
 
         # 4 group headings + 9 tools = 13 options total.
@@ -51,7 +51,7 @@ async def test_launcher_refresh_no_duplicate_ids(
     """
     from textual.widgets import OptionList
 
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     app = LauncherApp()
@@ -72,7 +72,7 @@ async def test_launcher_quit_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """q cleanly exits the app."""
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     app = LauncherApp()
@@ -96,7 +96,7 @@ async def test_launcher_focuses_menu_on_mount(
     """
     from textual.widgets import OptionList
 
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     app = LauncherApp()
@@ -120,7 +120,7 @@ async def test_launcher_all_icons_are_visually_2cell(
     """
     from wcwidth import wcswidth  # type: ignore[import-untyped]
 
-    from looni_build.core import TOOLS
+    from mythix_build_system.core import TOOLS
 
     widths = {tool.key: wcswidth(tool.icon) for tool in TOOLS}
     unique = set(widths.values())
@@ -142,7 +142,7 @@ async def test_launcher_enter_routes_by_non_interactive_flag(
     """
     from textual.widgets import OptionList
 
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     calls: list[tuple[str, str]] = []  # (mode, key)
@@ -157,8 +157,8 @@ async def test_launcher_enter_routes_by_non_interactive_flag(
     # copy via the module's get_tool lookup function rather than mutating.
     import dataclasses
 
-    from looni_build.core.tools import TOOLS_BY_KEY
-    from looni_build.tui import app as app_module
+    from mythix_build_system.core.tools import TOOLS_BY_KEY
+    from mythix_build_system.tui import app as app_module
 
     swapped = {
         key: (dataclasses.replace(tool, non_interactive=True)
@@ -204,7 +204,7 @@ async def test_launcher_b_and_l_keys_force_modes(
     """'b' forces BuildScreen; 'l' forces suspend — regardless of the flag."""
     from textual.widgets import OptionList
 
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     calls: list[tuple[str, str]] = []
@@ -253,7 +253,7 @@ async def test_launcher_b_key_ignores_disabled_rows(
     """
     from textual.widgets import OptionList
 
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     calls: list[str] = []
@@ -291,7 +291,7 @@ async def test_launcher_option_list_has_definite_width(
     """
     from textual.widgets import OptionList
 
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.setenv("PATH", "/nonexistent-for-tui-tests")
 
     app = LauncherApp()

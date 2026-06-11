@@ -1,15 +1,15 @@
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║  looni-build  •  Makefile  (subdirectory layout)                           ║
+# ║  mythix-build  •  Makefile  (subdirectory layout)                           ║
 # ║  Installs / uninstalls all builder and winetoolz scripts                   ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 #
 # Usage:
 #   make install          — install everything to $(PREFIX)
-#   make install-neutron  — install only looni-neutron_builder
-#   make install-proton   — install only looni-proton_builder
-#   make install-wine     — install only looni-wine_builder
-#   make install-hybrid   — install only looni-wine-proton_hybrid_builder
-#   make install-toolz    — install only looni-winetoolz
+#   make install-neutron  — install only mythix-neutron_builder
+#   make install-proton   — install only mythix-proton_builder
+#   make install-wine     — install only mythix-wine_builder
+#   make install-hybrid   — install only mythix-wine-proton_hybrid_builder
+#   make install-toolz    — install only mythix-winetoolz
 #   make uninstall        — remove everything installed by this Makefile
 #   make help             — show this reference
 #
@@ -28,36 +28,36 @@ BINDIR  := $(PREFIX)/bin
 
 # Each sub-project gets its own lib directory so internal SCRIPT_DIR-relative
 # paths continue to work correctly after install.
-NEUTRON_LIBDIR  := $(PREFIX)/lib/looni-neutron_builder
-PROTON_B_LIBDIR := $(PREFIX)/lib/looni-proton_builder
-WINE_LIBDIR     := $(PREFIX)/lib/looni-wine_builder
-HYBRID_LIBDIR   := $(PREFIX)/lib/looni-wine-proton_hybrid_builder
-NHYBRID_LIBDIR  := $(PREFIX)/lib/looni-wine-neutron_hybrid_builder
-TOOLZ_LIBDIR    := $(PREFIX)/lib/looni-winetoolz
-NEUTRON_I_LIBDIR := $(PREFIX)/lib/looni-neutron-install
-PROTON_I_LIBDIR  := $(PREFIX)/lib/looni-proton-install
+NEUTRON_LIBDIR  := $(PREFIX)/lib/mythix-neutron_builder
+PROTON_B_LIBDIR := $(PREFIX)/lib/mythix-proton_builder
+WINE_LIBDIR     := $(PREFIX)/lib/mythix-wine_builder
+HYBRID_LIBDIR   := $(PREFIX)/lib/mythix-wine-proton_hybrid_builder
+NHYBRID_LIBDIR  := $(PREFIX)/lib/mythix-wine-neutron_hybrid_builder
+TOOLZ_LIBDIR    := $(PREFIX)/lib/mythix-winetoolz
+NEUTRON_I_LIBDIR := $(PREFIX)/lib/mythix-neutron-install
+PROTON_I_LIBDIR  := $(PREFIX)/lib/mythix-proton-install
 
-CFGDIR  := $(HOME)/.config/looni-build
+CFGDIR  := $(HOME)/.config/mythix-build
 DESTDIR ?=
 
 # ── .bashrc management ───────────────────────────────────────────────────
 BASHRC          := $(HOME)/.bashrc
-MARKER_PATH_B   := \# ── looni-build PATH ──
-MARKER_PATH_E   := \# ── end looni-build PATH ──
-MARKER_WINE_B   := \# ── looni-build wine-default ──
-MARKER_WINE_E   := \# ── end looni-build wine-default ──
+MARKER_PATH_B   := \# ── mythix-build PATH ──
+MARKER_PATH_E   := \# ── end mythix-build PATH ──
+MARKER_WINE_B   := \# ── mythix-build wine-default ──
+MARKER_WINE_E   := \# ── end mythix-build wine-default ──
 
 # ── Source roots ──────────────────────────────────────────────────────────────
 ROOT   := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-LAUNCHER := $(ROOT)looni-build.sh
-NEUTRON   := $(ROOT)looni-neutron_builder
-PROTON_B  := $(ROOT)looni-proton_builder
-WINE      := $(ROOT)looni-wine_builder
-HYBRID    := $(ROOT)looni-wine-proton_hybrid_builder
-NHYBRID   := $(ROOT)looni-wine-neutron_hybrid_builder
-TOOLZ     := $(ROOT)looni-winetoolz
-NEUTRON_I := $(ROOT)looni-neutron-install
-PROTON_I  := $(ROOT)looni-proton-install
+LAUNCHER := $(ROOT)mythix-build.sh
+NEUTRON   := $(ROOT)mythix-neutron_builder
+PROTON_B  := $(ROOT)mythix-proton_builder
+WINE      := $(ROOT)mythix-wine_builder
+HYBRID    := $(ROOT)mythix-wine-proton_hybrid_builder
+NHYBRID   := $(ROOT)mythix-wine-neutron_hybrid_builder
+TOOLZ     := $(ROOT)mythix-winetoolz
+NEUTRON_I := $(ROOT)mythix-neutron-install
+PROTON_I  := $(ROOT)mythix-proton-install
 
 # ── File lists ────────────────────────────────────────────────────────────────
 
@@ -137,8 +137,8 @@ all: help
 
 # ── install ───────────────────────────────────────────────────────────────────
 install: _dirs install-launcher install-neutron install-proton install-wine install-hybrid install-neutron-hybrid install-toolz install-neutron-install install-proton-install _setup-path
-	@printf "\n\033[1;32m ✓  looni-build installed to %s\033[0m\n\n" "$(DESTDIR)$(PREFIX)"
-	@printf "  looni-build        → $(DESTDIR)$(BINDIR)/looni-build\n"
+	@printf "\n\033[1;32m ✓  mythix-build installed to %s\033[0m\n\n" "$(DESTDIR)$(PREFIX)"
+	@printf "  mythix-build        → $(DESTDIR)$(BINDIR)/mythix-build\n"
 	@printf "  neutron-builder    → $(DESTDIR)$(BINDIR)/neutron-builder\n"
 	@printf "  neutron-install    → $(DESTDIR)$(BINDIR)/neutron-install\n"
 	@printf "  proton-builder     → $(DESTDIR)$(BINDIR)/proton-builder\n"
@@ -165,9 +165,9 @@ _dirs:
 	install -d "$(DESTDIR)$(TOOLZ_LIBDIR)/modules/shared_lib"
 	install -d "$(DESTDIR)$(CFGDIR)"
 
-# ── looni-neutron_builder ──────────────────────────────────────────────────────
+# ── mythix-neutron_builder ──────────────────────────────────────────────────────
 install-neutron: _dirs
-	@printf "\033[1;36m── looni-neutron_builder\033[0m\n"
+	@printf "\033[1;36m── mythix-neutron_builder\033[0m\n"
 	install -m 755 "$(NEUTRON)/$(NEUTRON_BIN)" \
 	    "$(DESTDIR)$(BINDIR)/neutron-builder"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/neutron-builder\n"
@@ -192,9 +192,9 @@ install-neutron: _dirs
 	    printf "  \033[1;32m+\033[0m $$dest\n"; \
 	fi
 
-# ── looni-proton_builder ──────────────────────────────────────────────────────
+# ── mythix-proton_builder ──────────────────────────────────────────────────────
 install-proton: _dirs
-	@printf "\033[1;36m── looni-proton_builder\033[0m\n"
+	@printf "\033[1;36m── mythix-proton_builder\033[0m\n"
 	@if [ -f "$(PROTON_B)/$(PROTON_B_BIN)" ]; then \
 	    install -m 755 "$(PROTON_B)/$(PROTON_B_BIN)" "$(DESTDIR)$(BINDIR)/proton-builder"; \
 	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/proton-builder\n"; \
@@ -202,9 +202,9 @@ install-proton: _dirs
 	    printf "  \033[2mskip (not found): $(PROTON_B)/$(PROTON_B_BIN)\033[0m\n"; \
 	fi
 
-# ── looni-wine_builder ────────────────────────────────────────────────────────
+# ── mythix-wine_builder ────────────────────────────────────────────────────────
 install-wine: _dirs
-	@printf "\033[1;36m── looni-wine_builder\033[0m\n"
+	@printf "\033[1;36m── mythix-wine_builder\033[0m\n"
 	install -m 755 "$(WINE)/$(WINE_BIN)" \
 	    "$(DESTDIR)$(BINDIR)/wine-builder"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/wine-builder\n"
@@ -223,9 +223,9 @@ install-wine: _dirs
 	    printf "  \033[1;32m+\033[0m $$dest\n"; \
 	fi
 
-# ── looni-neutron-install ────────────────────────────────────────────────────
+# ── mythix-neutron-install ────────────────────────────────────────────────────
 install-neutron-install: _dirs
-	@printf "\033[1;36m── looni-neutron-install\033[0m\n"
+	@printf "\033[1;36m── mythix-neutron-install\033[0m\n"
 	install -m 755 "$(NEUTRON_I)/$(NEUTRON_I_BIN)" \
 	    "$(DESTDIR)$(BINDIR)/neutron-install"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/neutron-install\n"
@@ -233,9 +233,9 @@ install-neutron-install: _dirs
 	    "$(DESTDIR)$(NEUTRON_I_LIBDIR)/$(NEUTRON_I_BIN)"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(NEUTRON_I_LIBDIR)/$(NEUTRON_I_BIN)\n"
 
-# ── looni-proton-install ─────────────────────────────────────────────────────
+# ── mythix-proton-install ─────────────────────────────────────────────────────
 install-proton-install: _dirs
-	@printf "\033[1;36m── looni-proton-install\033[0m\n"
+	@printf "\033[1;36m── mythix-proton-install\033[0m\n"
 	install -m 755 "$(PROTON_I)/$(PROTON_I_BIN)" \
 	    "$(DESTDIR)$(BINDIR)/proton-install"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/proton-install\n"
@@ -243,16 +243,16 @@ install-proton-install: _dirs
 	    "$(DESTDIR)$(PROTON_I_LIBDIR)/$(PROTON_I_BIN)"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(PROTON_I_LIBDIR)/$(PROTON_I_BIN)\n"
 
-# ── looni-build launcher ─────────────────────────────────────────────────────
+# ── mythix-build launcher ─────────────────────────────────────────────────────
 install-launcher: _dirs
-	@printf "\033[1;36m── looni-build launcher\033[0m\n"
+	@printf "\033[1;36m── mythix-build launcher\033[0m\n"
 	install -m 755 "$(LAUNCHER)" \
-	    "$(DESTDIR)$(BINDIR)/looni-build"
-	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/looni-build\n"
+	    "$(DESTDIR)$(BINDIR)/mythix-build"
+	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/mythix-build\n"
 
-# ── looni-wine-proton_hybrid_builder ─────────────────────────────────────────
+# ── mythix-wine-proton_hybrid_builder ─────────────────────────────────────────
 install-hybrid: _dirs
-	@printf "\033[1;36m── looni-wine-proton_hybrid_builder\033[0m\n"
+	@printf "\033[1;36m── mythix-wine-proton_hybrid_builder\033[0m\n"
 	@if [ -f "$(HYBRID)/$(HYBRID_BIN)" ]; then \
 	    install -m 755 "$(HYBRID)/$(HYBRID_BIN)" "$(DESTDIR)$(BINDIR)/wine-proton_hybrid"; \
 	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/wine-proton_hybrid\n"; \
@@ -260,9 +260,9 @@ install-hybrid: _dirs
 	    printf "  \033[2mskip (not found): $(HYBRID)/$(HYBRID_BIN)\033[0m\n"; \
 	fi
 
-# ── looni-wine-neutron_hybrid_builder ────────────────────────────────────────
+# ── mythix-wine-neutron_hybrid_builder ────────────────────────────────────────
 install-neutron-hybrid: _dirs
-	@printf "\033[1;36m── looni-wine-neutron_hybrid_builder\033[0m\n"
+	@printf "\033[1;36m── mythix-wine-neutron_hybrid_builder\033[0m\n"
 	@if [ -f "$(NHYBRID)/$(NHYBRID_BIN)" ]; then \
 	    install -m 755 "$(NHYBRID)/$(NHYBRID_BIN)" "$(DESTDIR)$(BINDIR)/wine-neutron_hybrid"; \
 	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/wine-neutron_hybrid\n"; \
@@ -270,9 +270,9 @@ install-neutron-hybrid: _dirs
 	    printf "  \033[2mskip (not found): $(NHYBRID)/$(NHYBRID_BIN)\033[0m\n"; \
 	fi
 
-# ── looni-winetoolz ───────────────────────────────────────────────────────────
+# ── mythix-winetoolz ───────────────────────────────────────────────────────────
 install-toolz: _dirs
-	@printf "\033[1;36m── looni-winetoolz\033[0m\n"
+	@printf "\033[1;36m── mythix-winetoolz\033[0m\n"
 	install -m 755 "$(TOOLZ)/$(TOOLZ_BIN)" \
 	    "$(DESTDIR)$(BINDIR)/wine_toolz"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/wine_toolz\n"
@@ -282,7 +282,7 @@ install-toolz: _dirs
 	    install -m 755 "$$src" "$(DESTDIR)$(TOOLZ_LIBDIR)/$$f"; \
 	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(TOOLZ_LIBDIR)/$$f\n"; \
 	done
-	@printf '#!/usr/bin/env bash\n_d="$$(cd "$$(dirname "$$(readlink -f "$${BASH_SOURCE[0]}")")" && pwd)"\nexec bash "$${_d}/../lib/looni-winetoolz/modules/shared_lib/wine_install_manager.sh" "$$@"\n' \
+	@printf '#!/usr/bin/env bash\n_d="$$(cd "$$(dirname "$$(readlink -f "$${BASH_SOURCE[0]}")")" && pwd)"\nexec bash "$${_d}/../lib/mythix-winetoolz/modules/shared_lib/wine_install_manager.sh" "$$@"\n' \
 	    > "$(DESTDIR)$(BINDIR)/wine_install_mgr"
 	@chmod 755 "$(DESTDIR)$(BINDIR)/wine_install_mgr"
 	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/wine_install_mgr\n"
@@ -291,20 +291,20 @@ install-toolz: _dirs
 _setup-path:
 	@if [ -n "$(DESTDIR)" ]; then exit 0; fi; \
 	if [ -f "$(BASHRC)" ] && grep -qF '$(MARKER_PATH_B)' "$(BASHRC)"; then \
-	    printf "  \033[2m~/.bashrc: looni-build PATH block already present — skipped\033[0m\n"; \
+	    printf "  \033[2m~/.bashrc: mythix-build PATH block already present — skipped\033[0m\n"; \
 	else \
 	    { printf '\n$(MARKER_PATH_B)\n'; \
 	      printf 'export PATH="%s/bin:$$PATH"\n' "$(PREFIX)"; \
 	      printf '$(MARKER_PATH_E)\n'; \
 	    } >> "$(BASHRC)"; \
-	    printf "  \033[1;32m+\033[0m ~/.bashrc: added looni-build PATH block\n"; \
+	    printf "  \033[1;32m+\033[0m ~/.bashrc: added mythix-build PATH block\n"; \
 	    printf "    \033[2mRun:  source ~/.bashrc   (or open a new terminal)\033[0m\n"; \
 	fi
 
 # ── uninstall ─────────────────────────────────────────────────────────────────
 uninstall:
-	@printf "\033[1;33mRemoving looni-build from %s ...\033[0m\n" "$(DESTDIR)$(PREFIX)"
-	@for cmd in looni-build neutron-builder neutron-install proton-builder proton-install wine-builder wine_toolz wine_install_mgr wine-proton_hybrid wine-neutron_hybrid; do \
+	@printf "\033[1;33mRemoving mythix-build from %s ...\033[0m\n" "$(DESTDIR)$(PREFIX)"
+	@for cmd in mythix-build neutron-builder neutron-install proton-builder proton-install wine-builder wine_toolz wine_install_mgr wine-proton_hybrid wine-neutron_hybrid; do \
 	    f="$(DESTDIR)$(BINDIR)/$$cmd"; \
 	    [ -f "$$f" ] && { rm -f "$$f"; printf "  \033[1;31m-\033[0m $$f\n"; } || true; \
 	done
@@ -325,8 +325,8 @@ uninstall:
 	if [ -f "$(BASHRC)" ] && grep -qF '$(MARKER_PATH_B)' "$(BASHRC)"; then _has_path=true; fi; \
 	if [ -f "$(BASHRC)" ] && grep -qF '$(MARKER_WINE_B)' "$(BASHRC)"; then _has_wine=true; fi; \
 	if [ "$$_has_path" = "true" ] || [ "$$_has_wine" = "true" ]; then \
-	    printf "\033[1;33m  looni-build entries found in ~/.bashrc:\033[0m\n"; \
-	    [ "$$_has_path" = "true" ] && printf "    • looni-build PATH block\n"; \
+	    printf "\033[1;33m  mythix-build entries found in ~/.bashrc:\033[0m\n"; \
+	    [ "$$_has_path" = "true" ] && printf "    • mythix-build PATH block\n"; \
 	    [ "$$_has_wine" = "true" ] && printf "    • Wine default block\n"; \
 	    printf "\n  Remove these entries? [y/N] "; \
 	    read -r _ans; \
@@ -334,30 +334,30 @@ uninstall:
 	        [yY]|[yY][eE][sS]) \
 	            sed -i '\,^$(MARKER_PATH_B)$$,, \,^$(MARKER_PATH_E)$$, d' "$(BASHRC)" 2>/dev/null || true; \
 	            sed -i '\,^$(MARKER_WINE_B)$$,, \,^$(MARKER_WINE_E)$$, d' "$(BASHRC)" 2>/dev/null || true; \
-	            printf "  \033[1;31m-\033[0m ~/.bashrc: looni-build entries removed\n"; \
+	            printf "  \033[1;31m-\033[0m ~/.bashrc: mythix-build entries removed\n"; \
 	            printf "    \033[2mRun:  source ~/.bashrc   (or open a new terminal)\033[0m\n\n"; \
 	            ;; \
 	        *) printf "  \033[2m~/.bashrc: entries left in place\033[0m\n\n" ;; \
 	    esac; \
 	fi
 
-# ── Python TUI frontend (looni-build Python app) ─────────────────────────────
+# ── Python TUI frontend (mythix-build Python app) ─────────────────────────────
 # The Python launcher wraps the shell engines with a Textual TUI + Click CLI.
 # Shell scripts still do all the actual build work — py-* targets are optional.
 
 py-dev:
 	@printf "\033[1;36m── installing Python package (editable) + dev deps\033[0m\n"
 	@python3 -m pip install --user --break-system-packages -e ".[dev]"
-	@printf "\n  ${C_B}✓  looni\033[0m is now available. Try: \033[1mlooni doctor\033[0m\n\n"
+	@printf "\n  ${C_B}✓  mythix\033[0m is now available. Try: \033[1mmythix doctor\033[0m\n\n"
 
 py-test:
 	@python3 -m pytest -q
 
 py-tui:
-	@python3 -m looni_build
+	@python3 -m mythix_build_system
 
 py-doctor:
-	@python3 -m looni_build doctor
+	@python3 -m mythix_build_system doctor
 
 py-clean:
 	@rm -rf build/ dist/ *.egg-info .pytest_cache/ .ruff_cache/ .mypy_cache/
@@ -366,18 +366,18 @@ py-clean:
 
 # ── help ──────────────────────────────────────────────────────────────────────
 help:
-	@printf "\n\033[1mlooni-build — Wine / Neutron / Proton builders + winetoolz\033[0m\n\n"
+	@printf "\n\033[1mmythix-build — Wine / Neutron / Proton builders + winetoolz\033[0m\n\n"
 	@printf "\033[1mTargets:\033[0m\n"
 	@printf "  \033[1;36mmake install\033[0m           Install all sub-projects + add PATH to ~/.bashrc\n"
-	@printf "  \033[1;36mmake install-launcher\033[0m  looni-build launcher only\n"
-	@printf "  \033[1;36mmake install-neutron\033[0m         looni-neutron_builder only\n"
-	@printf "  \033[1;36mmake install-proton\033[0m          looni-proton_builder only\n"
-	@printf "  \033[1;36mmake install-neutron-install\033[0m looni-neutron-install only\n"
-	@printf "  \033[1;36mmake install-proton-install\033[0m  looni-proton-install only\n"
-	@printf "  \033[1;36mmake install-wine\033[0m            looni-wine_builder only\n"
-	@printf "  \033[1;36mmake install-hybrid\033[0m          looni-wine-proton_hybrid_builder only\n"
-	@printf "  \033[1;36mmake install-neutron-hybrid\033[0m  looni-wine-neutron_hybrid_builder only\n"
-	@printf "  \033[1;36mmake install-toolz\033[0m           looni-winetoolz only\n"
+	@printf "  \033[1;36mmake install-launcher\033[0m  mythix-build launcher only\n"
+	@printf "  \033[1;36mmake install-neutron\033[0m         mythix-neutron_builder only\n"
+	@printf "  \033[1;36mmake install-proton\033[0m          mythix-proton_builder only\n"
+	@printf "  \033[1;36mmake install-neutron-install\033[0m mythix-neutron-install only\n"
+	@printf "  \033[1;36mmake install-proton-install\033[0m  mythix-proton-install only\n"
+	@printf "  \033[1;36mmake install-wine\033[0m            mythix-wine_builder only\n"
+	@printf "  \033[1;36mmake install-hybrid\033[0m          mythix-wine-proton_hybrid_builder only\n"
+	@printf "  \033[1;36mmake install-neutron-hybrid\033[0m  mythix-wine-neutron_hybrid_builder only\n"
+	@printf "  \033[1;36mmake install-toolz\033[0m           mythix-winetoolz only\n"
 	@printf "  \033[1;36mmake uninstall\033[0m         Remove all installed files (asks about ~/.bashrc)\n"
 	@printf "  \033[1;36mmake help\033[0m              Show this message\n"
 	@printf "\n\033[1mPython TUI frontend (optional):\033[0m\n"
@@ -393,25 +393,25 @@ help:
 	@printf "  $(PREFIX)/bin/\n"
 	@printf "      neutron-builder  neutron-install  proton-builder  proton-install\n"
 	@printf "      wine-builder  wine_toolz  wine-proton_hybrid  wine-neutron_hybrid\n"
-	@printf "  $(PREFIX)/lib/looni-neutron_builder/\n"
+	@printf "  $(PREFIX)/lib/mythix-neutron_builder/\n"
 	@printf "      *.sh  ntsync.h  deps-neutron-tkg\n"
-	@printf "  $(PREFIX)/lib/looni-neutron_builder/patches/\n"
+	@printf "  $(PREFIX)/lib/mythix-neutron_builder/patches/\n"
 	@printf "      ← drop .patch/.diff here to apply before proton-wine configure\n"
-	@printf "  $(PREFIX)/lib/looni-wine-proton_hybrid_builder/buildz/\n"
+	@printf "  $(PREFIX)/lib/mythix-wine-proton_hybrid_builder/buildz/\n"
 	@printf "      ← hybrid builds install here when using 'local' mode\n"
-	@printf "  $(PREFIX)/lib/looni-wine_builder/\n"
+	@printf "  $(PREFIX)/lib/mythix-wine_builder/\n"
 	@printf "      *.sh  deps-tkg\n"
-	@printf "  $(PREFIX)/lib/looni-wine_builder/patches/\n"
+	@printf "  $(PREFIX)/lib/mythix-wine_builder/patches/\n"
 	@printf "      ← drop .patch/.diff here to apply before Wine configure\n"
-	@printf "  $(PREFIX)/lib/looni-winetoolz/modules/shared_lib/\n"
-	@printf "  $(HOME)/.config/looni-build/    ← cfg files (never overwritten)\n"
+	@printf "  $(PREFIX)/lib/mythix-winetoolz/modules/shared_lib/\n"
+	@printf "  $(HOME)/.config/mythix-build/    ← cfg files (never overwritten)\n"
 	@printf "\n\033[1mRuntime dirs (created by scripts on first run):\033[0m\n"
 	@printf "  <data-dir>/buildz/install/       ← finished Wine / Proton installs\n"
 	@printf "  <data-dir>/buildz/build-run/     ← in-progress build trees\n"
 	@printf "  <data-dir>/src/                  ← git-cloned sources\n"
 	@printf "  (data-dir defaults to the lib dir; override with --dest / --src-dir)\n"
 	@printf "\n\033[1mQuick start:\033[0m\n"
-	@printf "  looni-build                     # launch the main menu\n"
+	@printf "  mythix-build                     # launch the main menu\n"
 	@printf "  neutron-builder                  # build Neutron interactively\n"
 	@printf "  proton-builder                   # build Proton interactively\n"
 	@printf "  wine-builder                    # build Wine interactively\n"
@@ -419,7 +419,7 @@ help:
 	@printf "  wine-proton_hybrid              # Proton hybrid installer\n"
 	@printf "  wine-neutron_hybrid             # Neutron hybrid installer\n\n"
 	@printf "\033[1m~/.bashrc management:\033[0m\n"
-	@printf "  make install   adds a PATH block so looni-build commands are available.\n"
+	@printf "  make install   adds a PATH block so mythix-build commands are available.\n"
 	@printf "  wine-builder   offers to set a completed build as your default Wine\n"
 	@printf "                 (adds PATH + WINEPREFIX + WINESERVER exports).\n"
 	@printf "  make uninstall asks whether to remove both blocks.\n"

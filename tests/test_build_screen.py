@@ -25,9 +25,9 @@ from pathlib import Path
 
 import pytest
 
-from looni_build.tui.build_runner import BuildOutcome, stream_build
-from looni_build.tui.build_screen import BuildScreen
-from looni_build.tui.progress import EventKind
+from mythix_build_system.tui.build_runner import BuildOutcome, stream_build
+from mythix_build_system.tui.build_screen import BuildScreen
+from mythix_build_system.tui.progress import EventKind
 
 
 def _make_script(tmp_path: Path, body: str) -> Path:
@@ -141,7 +141,7 @@ async def test_stream_build_matches_real_neutron_markers(tmp_path: Path) -> None
     Regression anchor: if the shell tools change their prelude (e.g. swap
     ``==>`` for something else), this test fails and the parser needs
     updating. The marker definitions live in
-    ``looni-neutron_builder/neutron-build-core.sh`` lines 42-47.
+    ``mythix-neutron_builder/neutron-build-core.sh`` lines 42-47.
     """
     script = _make_script(tmp_path, r"""
 # Mirror the exact prelude from neutron-build-core.sh (ANSI stripped).

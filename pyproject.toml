@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "looni-build"
+name = "mythix-build"
 version = "1.0.0"
 description = "Wine / Neutron / Proton build toolkit — Python TUI/GUI frontend over the shell engines"
 readme = "README.md"
@@ -34,14 +34,14 @@ dev = [
 ]
 
 [project.scripts]
-looni = "looni_build.cli:main"
+mythix = "mythix_build_system.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/blu2442/looni-build"
-Issues = "https://github.com/blu2442/looni-build/issues"
+Homepage = "https://github.com/blu2442/mythix-build-system"
+Issues = "https://github.com/blu2442/mythix-build-system/issues"
 
 [tool.hatch.build.targets.wheel]
-packages = ["looni_build"]
+packages = ["mythix_build_system"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

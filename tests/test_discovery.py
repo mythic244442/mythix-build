@@ -1,4 +1,4 @@
-"""Tests for looni_build.core.discovery."""
+"""Tests for mythix_build_system.core.discovery."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from looni_build.core.discovery import find_tool, resolve_root
-from looni_build.core.tools import TOOLS, TOOLS_BY_KEY, get_tool
+from mythix_build_system.core.discovery import find_tool, resolve_root
+from mythix_build_system.core.tools import TOOLS, TOOLS_BY_KEY, get_tool
 
 
 # ── resolve_root ─────────────────────────────────────────────────────────────
@@ -18,8 +18,8 @@ def test_resolve_root_honours_env(
     fake_source_tree: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """$LOONI_ROOT wins over CWD heuristics."""
-    monkeypatch.setenv("LOONI_ROOT", str(fake_source_tree))
+    """$MYTHIX_ROOT wins over CWD heuristics."""
+    monkeypatch.setenv("MYTHIX_ROOT", str(fake_source_tree))
     monkeypatch.chdir("/tmp")
     assert resolve_root() == fake_source_tree
 
@@ -29,10 +29,10 @@ def test_resolve_root_ignores_invalid_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A bogus $LOONI_ROOT falls through to the directory walk."""
+    """A bogus $MYTHIX_ROOT falls through to the directory walk."""
     bogus = tmp_path / "not-a-repo"
     bogus.mkdir()
-    monkeypatch.setenv("LOONI_ROOT", str(bogus))
+    monkeypatch.setenv("MYTHIX_ROOT", str(bogus))
     # But CWD is inside the real fake root.
     assert resolve_root(start=fake_source_tree) == fake_source_tree
 
@@ -42,9 +42,9 @@ def test_resolve_root_walks_up(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Starting deep inside the checkout walks up to the root."""
-    deep = fake_source_tree / "looni-wine_builder" / "patches"
+    deep = fake_source_tree / "mythix-wine_builder" / "patches"
     deep.mkdir(parents=True, exist_ok=True)
-    monkeypatch.delenv("LOONI_ROOT", raising=False)
+    monkeypatch.delenv("MYTHIX_ROOT", raising=False)
     assert resolve_root(start=deep) == fake_source_tree
 
 
@@ -53,7 +53,7 @@ def test_resolve_root_none_for_unrelated_dir(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An empty directory has no root to find."""
-    monkeypatch.delenv("LOONI_ROOT", raising=False)
+    monkeypatch.delenv("MYTHIX_ROOT", raising=False)
     # tmp_path has no root markers. resolve_root also probes the package's
     # own on-disk location, so we accept either None or a path that is NOT
     # under tmp_path.
@@ -144,7 +144,7 @@ def test_get_tool_raises_for_unknown() -> None:
 
 def test_every_group_is_known() -> None:
     """Every tool's group is one of the known UI group labels."""
-    from looni_build.tui.app import _GROUP_LABELS
+    from mythix_build_system.tui.app import _GROUP_LABELS
 
     for tool in TOOLS:
         assert tool.group in _GROUP_LABELS, (

@@ -1,4 +1,4 @@
-# looni-build
+# mythix-build
 
 **Wine & Neutron builders, delegated Proton builder, hybrid installer, GUI toolkit, and installers — all in one repo.**
 
@@ -31,7 +31,7 @@ and a tool catalogue.
 ⠀⠀⠀⡟⡿⢿⡿⠀⠀⠀⠀⠀⠙⠀⠻⢯⢷⣼⠁⠁⠀⠀⠀⠀⠀⡄⡈⢆⠀
 ⠀⠀⠀⠀⡇⣿⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠦⠀⠀⠀⠀⠀⠀⡇⢹⢿⡀
 ⠀⠀⠀⠀⠁⠛⠓⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠼⠇⠁
-                looni-build v1.0.0
+                mythix-build v1.0.0
 ```
 
 ---
@@ -45,14 +45,14 @@ and a tool catalogue.
   - [GUI (Tkinter)](#gui-tkinter)
   - [CLI (Click)](#cli-click)
 - [Tools](#tools)
-  - [wine-builder](#-wine-builder--looni-wine_builder)
-  - [neutron-builder](#-neutron-builder--looni-neutron_builder)
-  - [proton-builder](#-proton-builder--looni-proton_builder)
-  - [neutron-install](#-neutron-install--looni-neutron-install)
-  - [proton-install](#-proton-install--looni-proton-install)
-  - [wine-proton_hybrid](#-wine-proton_hybrid--looni-wine-proton_hybrid_builder)
-  - [wine-neutron_hybrid](#-wine-neutron_hybrid--looni-wine-neutron_hybrid_builder)
-  - [wine_toolz](#-wine_toolz--looni-winetoolz)
+  - [wine-builder](#-wine-builder--mythix-wine_builder)
+  - [neutron-builder](#-neutron-builder--mythix-neutron_builder)
+  - [proton-builder](#-proton-builder--mythix-proton_builder)
+  - [neutron-install](#-neutron-install--mythix-neutron-install)
+  - [proton-install](#-proton-install--mythix-proton-install)
+  - [wine-proton_hybrid](#-wine-proton_hybrid--mythix-wine-proton_hybrid_builder)
+  - [wine-neutron_hybrid](#-wine-neutron_hybrid--mythix-wine-neutron_hybrid_builder)
+  - [wine_toolz](#-wine_toolz--mythix-winetoolz)
   - [Wine Install Manager](#-wine-install-manager)
 - [Project Layout](#project-layout)
 - [Data Directories](#data-directories)
@@ -65,12 +65,12 @@ and a tool catalogue.
 ## Quick Start
 
 ```bash
-git clone https://github.com/blu2442/looni-build
-cd looni-build
+git clone https://github.com/blu2442/mythix-build
+cd mythix-build
 make install            # installs to ~/.local (adds PATH to ~/.bashrc)
 source ~/.bashrc
 
-looni-build             # main menu — pick any tool
+mythix-build             # main menu — pick any tool
 wine-builder            # build Wine interactively
 neutron-builder         # build Neutron interactively
 proton-builder          # build GE-Proton or proton-tkg (delegated)
@@ -85,11 +85,11 @@ wine-neutron_hybrid     # hybrid installer (Neutron base)
 
 ```bash
 make py-dev             # editable install (pip install -e .[dev])
-looni                   # open the Textual TUI
-looni --gui             # open the Tkinter GUI
-looni launch wine_toolz # run a tool with full TTY handoff
-looni list              # print the tool catalogue
-looni doctor            # diagnose discovery + check what's found
+mythix                   # open the Textual TUI
+mythix --gui             # open the Tkinter GUI
+mythix launch wine_toolz # run a tool with full TTY handoff
+mythix list              # print the tool catalogue
+mythix doctor            # diagnose discovery + check what's found
 ```
 
 ---
@@ -112,7 +112,7 @@ make install-hybrid          # wine-proton hybrid_builder only
 make install-neutron-hybrid  # wine-neutron hybrid_builder only
 make install-neutron-install # neutron-install only
 make install-toolz           # winetoolz only
-make install-launcher        # looni-build main menu only
+make install-launcher        # mythix-build main menu only
 ```
 
 The installer adds a `PATH` block to `~/.bashrc` automatically. If `~/.local/bin`
@@ -133,23 +133,23 @@ pip install -e .        # minimal: textual + click
 pip install -e ".[dev]" # adds pytest, pytest-asyncio, textual-dev
 ```
 
-After install, the `looni` console script is available:
+After install, the `mythix` console script is available:
 
 ```bash
-looni                   # TUI launcher (default)
-looni --gui             # Tkinter GUI launcher
-looni launch <tool>     # run a tool with full TTY handoff
-looni build <tool>      # run a tool with live progress screen
-looni list              # print tool catalogue
-looni doctor            # diagnose tool discovery
-looni version           # print version
+mythix                   # TUI launcher (default)
+mythix --gui             # Tkinter GUI launcher
+mythix launch <tool>     # run a tool with full TTY handoff
+mythix build <tool>      # run a tool with live progress screen
+mythix list              # print tool catalogue
+mythix doctor            # diagnose tool discovery
+mythix version           # print version
 ```
 
 ---
 
 ## Python Frontend
 
-The `looni_build/` Python package provides three frontends over the shell build
+The `mythix_build_system/` Python package provides three frontends over the shell build
 engines — a modern TUI, a graphical GUI, and a scriptable CLI. The shell scripts
 still do all the real work; Python handles the launcher UX, tool discovery,
 subprocess orchestration, and live build progress.
@@ -161,9 +161,9 @@ Same wolf banner and tool list as the bash launcher, rendered with keyboard navi
 grouped categories, and a keybind footer.
 
 ```bash
-looni                   # open the TUI
+mythix                   # open the TUI
 make py-tui             # same thing via Makefile
-python -m looni_build   # same thing via Python module
+python -m mythix_build_system   # same thing via Python module
 ```
 
 **Keybindings:**
@@ -196,8 +196,8 @@ category with colored headers and hover effects. Clicking a tool opens it in you
 terminal emulator.
 
 ```bash
-looni --gui                 # from the CLI
-python -m looni_build.gui   # direct module launch
+mythix --gui                 # from the CLI
+python -m mythix_build_system.gui   # direct module launch
 ```
 
 **Supported terminal emulators** (auto-detected in order):
@@ -212,25 +212,25 @@ A [Click](https://click.palletsprojects.com/)-based command-line interface for
 scripting and direct tool invocation without opening a TUI.
 
 ```bash
-looni list                          # pretty-print the tool catalogue
-looni list --format=keys            # one key per line (for scripting)
-looni list --format=plain           # tab-separated key/path/blurb
-looni launch wine-builder           # full TTY handoff
-looni launch neutron-builder -- --source proton-wine --branch proton_9.0
-looni build neutron-builder -- --dry-run
-looni doctor                        # show repo root + tool resolution
-looni version                       # print version string
+mythix list                          # pretty-print the tool catalogue
+mythix list --format=keys            # one key per line (for scripting)
+mythix list --format=plain           # tab-separated key/path/blurb
+mythix launch wine-builder           # full TTY handoff
+mythix launch neutron-builder -- --source proton-wine --branch proton_9.0
+mythix build neutron-builder -- --dry-run
+mythix doctor                        # show repo root + tool resolution
+mythix version                       # print version string
 ```
 
 | Command | Description |
 |---------|-------------|
-| `looni` | Open the TUI launcher (default) |
-| `looni --gui` | Open the Tkinter GUI launcher |
-| `looni launch TOOL [ARGS...]` | Run a tool with full TTY handoff (fzf/zenity work) |
-| `looni build TOOL [ARGS...]` | Run a tool with live progress screen (non-interactive) |
-| `looni list` | Print the tool catalogue |
-| `looni doctor` | Diagnose discovery — repo root and resolved tool paths |
-| `looni version` | Print the version |
+| `mythix` | Open the TUI launcher (default) |
+| `mythix --gui` | Open the Tkinter GUI launcher |
+| `mythix launch TOOL [ARGS...]` | Run a tool with full TTY handoff (fzf/zenity work) |
+| `mythix build TOOL [ARGS...]` | Run a tool with live progress screen (non-interactive) |
+| `mythix list` | Print the tool catalogue |
+| `mythix doctor` | Diagnose discovery — repo root and resolved tool paths |
+| `mythix version` | Print the version |
 
 **Tool discovery** works in three modes:
 
@@ -241,13 +241,13 @@ looni version                       # print version string
 3. **Installed without PATH** — probes `~/.local`, `/usr/local`, `/usr` for
    `bin/` and `lib/` layouts.
 
-Set `$LOONI_ROOT` to explicitly point at a source checkout.
+Set `$MYTHIX_ROOT` to explicitly point at a source checkout.
 
 ---
 
 ## Tools
 
-### 🍷 wine-builder — looni-wine_builder
+### 🍷 wine-builder — mythix-wine_builder
 
 Builds Wine from 10 upstream sources with full 32+64-bit cross-compile, ccache
 support, TKG patch integration, and automated staging application.
@@ -313,7 +313,7 @@ tree with `bin/wine`, `lib/`, etc.
 
 ---
 
-### 🎮 neutron-builder — looni-neutron_builder
+### 🎮 neutron-builder — mythix-neutron_builder
 
 Builds a complete **Neutron package** (a Steam-compatible Proton tool) from source: a Wine build
 (proton-wine, GE-Proton, or kron4ek-tkg) compiled with MinGW PE support, plus DXVK and
@@ -381,7 +381,7 @@ neutron-builder --source ge-proton                    # interactive GE release p
 neutron-builder --source ge-proton --branch GE-Proton9-20  # pin to specific release
 ```
 
-The resulting build appears in Steam as `looni-ge-neutron-<version>`.
+The resulting build appears in Steam as `mythix-ge-neutron-<version>`.
 
 **Post-patch fixups:** The builder automatically fixes known incompatibilities between
 GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
@@ -413,7 +413,7 @@ GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
 | `--vkd3d NAME` | VKD3D variant (`vkd3d-proton` \| `none`) |
 | `--dxvk-branch BRANCH` | Pin DXVK to specific tag |
 | `--vkd3d-branch BRANCH` | Pin VKD3D-Proton to specific tag |
-| `--name NAME` | Build name (default: `looni-neutron-<ver>`) |
+| `--name NAME` | Build name (default: `mythix-neutron-<ver>`) |
 | `--dest DIR` | Root for build artefacts |
 | `--src-dir DIR` | Root for git clones |
 | `--jobs N` | Parallel make threads (default: `nproc`) |
@@ -649,7 +649,7 @@ It is a useful reference case because it exercises several things simultaneously
 After a successful build:
 
 ```bash
-cp -r ~/.local/share/looni-neutron_builder/buildz/install/<name> \
+cp -r ~/.local/share/mythix-neutron_builder/buildz/install/<name> \
       ~/.steam/steam/compatibilitytools.d/
 ```
 
@@ -660,7 +660,7 @@ Restart Steam, then go to a game's Properties → Compatibility → select your 
 
 ---
 
-### 🔧 proton-builder — looni-proton_builder
+### 🔧 proton-builder — mythix-proton_builder
 
 Builds **GE-Proton** or **proton-tkg** using their own upstream build systems —
 "delegated builds." Unlike neutron-builder (which compiles Wine, DXVK, and VKD3D from
@@ -711,12 +711,12 @@ runs `./proton-tkg.sh`. TKG handles its own container setup via the Valve SDK. T
 | `--clean` | Remove source checkouts and build intermediates |
 | `--dry-run` | Show what would happen without building |
 
-Build output lands in `~/.local/share/looni-proton_builder/buildz/install/`. Deploy
+Build output lands in `~/.local/share/mythix-proton_builder/buildz/install/`. Deploy
 with `proton-install --deploy <path>` or the interactive `proton-install` menu.
 
 ---
 
-### 🚀 neutron-install — looni-neutron-install
+### 🚀 neutron-install — mythix-neutron-install
 
 A full CLI package manager for Neutron builds. Installs, deploys to Steam, sets up
 as system Wine, switches active versions, and manages installed Neutron packages —
@@ -745,13 +745,13 @@ neutron-install info                        # disk usage, version, architecture 
 | **Remove** | Remove installs and clean up symlinks |
 | **Info** | Disk usage, Wine version, source, contents breakdown |
 
-**Managed installs** go to `~/.local/share/looni-neutron-installs/<name>/` with
-`.looni-meta` metadata. Symlinks include all Wine binaries (`wine`, `wine64`,
+**Managed installs** go to `~/.local/share/mythix-neutron-installs/<name>/` with
+`.mythix-meta` metadata. Symlinks include all Wine binaries (`wine`, `wine64`,
 `wineserver`, `wineboot`, `winecfg`, etc.) plus the `neutron` Python launcher.
 
 ---
 
-### 🚀 proton-install — looni-proton-install
+### 🚀 proton-install — mythix-proton-install
 
 Download pre-built Proton releases and deploy locally-built Proton packages into
 Steam's `compatibilitytools.d/`. Handles GE-Proton downloads, any GitHub release
@@ -812,7 +812,7 @@ The new tool will appear (or disappear) under a game's Properties → Compatibil
 
 ---
 
-### 🔀 wine-proton_hybrid — looni-wine-proton_hybrid_builder
+### 🔀 wine-proton_hybrid — mythix-wine-proton_hybrid_builder
 
 Merges any Wine build directly over an existing Proton install, preserving Proton's
 DXVK, VKD3D-Proton, Steam overlay DLLs, and Python launcher. Run your custom Wine
@@ -834,7 +834,7 @@ wine-proton_hybrid --uninstall --name my-hybrid
 |------|-------------|
 | `--wine-src DIR` | Path to the custom Wine build directory |
 | `--proton-src DIR` | Path to the Proton/GE-Proton source |
-| `--name NAME` | Tool name (default: `wine-proton_looni`) |
+| `--name NAME` | Tool name (default: `wine-proton_mythix`) |
 | `--protonfixes-dir DIR` | Path to protonfixes source (umu-protonfixes, etc.) |
 | `--install-mode MODE` | `steam` \| `steam-pick` \| `custom` |
 | `--install-dir DIR` | Parent directory for custom installs |
@@ -849,7 +849,7 @@ The hybrid installs a standalone launcher script. Control it with:
 
 | Variable | Description |
 |----------|-------------|
-| `LOONI_PREFIX` | Exact prefix path (default: `~/.wine-proton-pfx`) |
+| `MYTHIX_PREFIX` | Exact prefix path (default: `~/.wine-proton-pfx`) |
 | `WINE_USE_START` | Set to `1` for launcher-wrapped games (e.g., GTA IV) |
 | `PROTON_LOG` | Set to `1` for verbose Wine debug log in `/tmp/` |
 | `DXVK_HUD` | Set to `1` for DXVK overlay |
@@ -857,7 +857,7 @@ The hybrid installs a standalone launcher script. Control it with:
 
 ---
 
-### 🔀 wine-neutron_hybrid — looni-wine-neutron_hybrid_builder
+### 🔀 wine-neutron_hybrid — mythix-wine-neutron_hybrid_builder
 
 Merges any Wine build directly over an existing **Neutron** package base, producing a
 single hybrid tool that can be registered with Steam as a compatibility tool or used
@@ -868,7 +868,7 @@ targeting Neutron packages instead of Proton installs.
 wine-neutron_hybrid                          # interactive wizard
 wine-neutron_hybrid \
     --wine-src ~/builds/wine-staging-10.5 \
-    --neutron-src ~/.steam/steam/compatibilitytools.d/looni-neutron-9.0 \
+    --neutron-src ~/.steam/steam/compatibilitytools.d/mythix-neutron-9.0 \
     --name my-hybrid \
     --install-mode steam
 wine-neutron_hybrid --uninstall --name my-hybrid
@@ -880,7 +880,7 @@ wine-neutron_hybrid --uninstall --name my-hybrid
 |------|-------------|
 | `--wine-src DIR` | Path to the custom Wine build directory |
 | `--neutron-src DIR` | Path to the Neutron package directory |
-| `--name NAME` | Tool name (default: `wine-neutron_looni`) |
+| `--name NAME` | Tool name (default: `wine-neutron_mythix`) |
 | `--protonfixes-dir DIR` | Path to protonfixes source (umu-protonfixes, etc.) |
 | `--install-mode MODE` | `steam` \| `steam-pick` \| `custom` |
 | `--install-dir DIR` | Parent directory for custom installs |
@@ -895,7 +895,7 @@ The hybrid installs a standalone launcher script. Control it with:
 
 | Variable | Description |
 |----------|-------------|
-| `LOONI_PREFIX` | Exact prefix path (default: `~/.wine-neutron-pfx`) |
+| `MYTHIX_PREFIX` | Exact prefix path (default: `~/.wine-neutron-pfx`) |
 | `WINE_USE_START` | Set to `1` for launcher-wrapped games (e.g., GTA IV) |
 | `PROTON_LOG` | Set to `1` for verbose Wine debug log in `/tmp/` |
 | `DXVK_HUD` | Set to `1` for DXVK overlay |
@@ -903,7 +903,7 @@ The hybrid installs a standalone launcher script. Control it with:
 
 ---
 
-### 🛠️ wine_toolz — looni-winetoolz
+### 🛠️ wine_toolz — mythix-winetoolz
 
 A zenity-based GUI for managing Wine prefixes, installing graphics layers, runtimes,
 and components. 20+ modules across 7 categories.
@@ -976,10 +976,10 @@ Run a full health check on any prefix:
 ### 📦 Wine Install Manager
 
 A dedicated manager for installing, switching between, and
-uninstalling custom Wine builds. Accessible from both the main `looni-build` menu
+uninstalling custom Wine builds. Accessible from both the main `mythix-build` menu
 and winetoolz's Wine category.
 
-**Install location:** `~/.local/share/looni-wine-installs/<name>/`
+**Install location:** `~/.local/share/mythix-wine-installs/<name>/`
 **Symlink directory:** `~/.local/bin/`
 
 #### Features
@@ -995,18 +995,18 @@ and winetoolz's Wine category.
 #### How It Works
 
 1. **Install** copies (via rsync) or extracts the Wine build into its own directory
-   under `~/.local/share/looni-wine-installs/`.
-2. A `.looni-meta` metadata file is written with version, source, and install date.
+   under `~/.local/share/mythix-wine-installs/`.
+2. A `.mythix-meta` metadata file is written with version, source, and install date.
 3. **Switch** creates symlinks (`wine`, `wine64`, `wineserver`, `wineboot`, `winecfg`,
    etc.) in `~/.local/bin/` pointing to the active install.
-4. Only symlinks managed by looni-build are touched — existing system Wine is never modified.
+4. Only symlinks managed by mythix-build are touched — existing system Wine is never modified.
 5. **Uninstall** removes the install directory and cleans up any symlinks pointing to it.
 
 #### Source Detection
 
 When installing from wine-builder output, the manager scans:
 
-- `~/.local/share/looni-wine_builder/buildz/install/`
+- `~/.local/share/mythix-wine_builder/buildz/install/`
 - `~/wine-custom/buildz/`
 
 Any directory containing `bin/wine` or `bin/wine64` is a valid source.
@@ -1016,16 +1016,16 @@ Any directory containing `bin/wine` or `bin/wine64` is a valid source.
 ## Project Layout
 
 ```
-looni-build/
-├── looni-build.sh                              Main launcher menu (fzf or numbered)
+mythix-build/
+├── mythix-build.sh                              Main launcher menu (fzf or numbered)
 ├── Makefile                                    Install / uninstall
 ├── pyproject.toml                              Python package config (hatchling)
 ├── README.md
 │
-├── looni_build/                                Python frontend package
+├── mythix_build_system/                                Python frontend package
 │   ├── __init__.py                             Package root + version
-│   ├── __main__.py                             python -m looni_build entry
-│   ├── cli.py                                  Click CLI (looni command)
+│   ├── __main__.py                             python -m mythix_build_system entry
+│   ├── cli.py                                  Click CLI (mythix command)
 │   ├── core/
 │   │   ├── __init__.py                         Re-exports: TOOLS, find_tool, run_tool
 │   │   ├── tools.py                            Tool dataclass + catalogue (9 tools)
@@ -1039,7 +1039,7 @@ looni-build/
 │   │   └── progress.py                         Stage-marker parser (==> / ── / ✓)
 │   └── gui/
 │       ├── __init__.py                         Re-exports main
-│       ├── __main__.py                         python -m looni_build.gui entry
+│       ├── __main__.py                         python -m mythix_build_system.gui entry
 │       └── app.py                              Tkinter GUI launcher
 │
 ├── tests/
@@ -1051,7 +1051,7 @@ looni-build/
 │   ├── test_build_screen.py                    BuildScreen tests
 │   └── test_progress.py                        Progress parser tests
 │
-├── looni-wine_builder/
+├── mythix-wine_builder/
 │   ├── wine-builder.sh                         Entry point (CLI + interactive)
 │   ├── wine-build-core.sh                      Build engine
 │   ├── build-32.sh                             32-bit compile wrapper
@@ -1065,7 +1065,7 @@ looni-build/
 │   ├── patches/                                Drop .patch/.diff files here
 │   └── deps-tkg                                TKG dependency list
 │
-├── looni-neutron_builder/
+├── mythix-neutron_builder/
 │   ├── neutron-builder.sh                      Entry point
 │   ├── neutron-build-core.sh                   Build engine
 │   ├── neutron-dxvk-build.sh                   DXVK builder (meson/ninja, static MinGW)
@@ -1073,7 +1073,7 @@ looni-build/
 │   ├── neutron-package.sh                      Steam package assembler (launcher, bootstrap,
 │   │                                           toolmanifest, dxvk.conf, Steam components)
 │   ├── neutron-patcher.sh                      Patch system engine (fzf multi-picker)
-│   ├── _output_common.sh                       → symlink to ../looni-wine_builder/
+│   ├── _output_common.sh                       → symlink to ../mythix-wine_builder/
 │   ├── dxvk.conf                               Shipped DXVK config (async, state cache)
 │   ├── vkd3d-proton.conf                       Shipped VKD3D-Proton config reference
 │   ├── spinner.sh                              Progress animation
@@ -1084,23 +1084,23 @@ looni-build/
 │   │   └── custom/                             Empty template — drop .patch files here
 │   └── deps-neutron-tkg                        TKG dependency list
 │
-├── looni-proton_builder/
+├── mythix-proton_builder/
 │   └── proton-builder.sh                       Delegated build wrapper (GE / TKG)
 │
-├── looni-neutron-install/
+├── mythix-neutron-install/
 │   └── neutron-install.sh                      Neutron package deployer
 │
-├── looni-proton-install/
+├── mythix-proton-install/
 │   └── proton-install.sh                       Proton downloader / deployer
 │
-├── looni-wine-proton_hybrid_builder/
+├── mythix-wine-proton_hybrid_builder/
 │   ├── wine-proton_hybrid-v1.0.0.sh            Hybrid installer (Proton base)
 │   └── buildz/                                 Build output (local mode)
 │
-├── looni-wine-neutron_hybrid_builder/
+├── mythix-wine-neutron_hybrid_builder/
 │   └── wine-neutron_hybrid-v1.0.0.sh           Hybrid installer (Neutron base)
 │
-└── looni-winetoolz/
+└── mythix-winetoolz/
     ├── wine_toolz.sh                           Main launcher (zenity GUI)
     └── modules/
         ├── winetoolz-lib.sh                    Shared library (dialogs, Wine resolution)
@@ -1138,7 +1138,7 @@ explicitly `make install PREFIX=/usr/local`.
 ```
 ~/.local/
 ├── bin/
-│   ├── looni-build             Main menu
+│   ├── mythix-build             Main menu
 │   ├── wine-builder            Wine builder
 │   ├── neutron-builder         Neutron builder
 │   ├── proton-builder          Delegated Proton builder (GE / TKG)
@@ -1149,50 +1149,50 @@ explicitly `make install PREFIX=/usr/local`.
 │   ├── wine-neutron_hybrid     Hybrid installer (Neutron base)
 │   └── wine_install_mgr        Wine Install Manager (standalone entry point)
 └── lib/
-    ├── looni-neutron_builder/  Engine scripts + patches/
-    ├── looni-wine_builder/     Engine scripts + patches/
-    ├── looni-neutron-install/  neutron-install script
-    ├── looni-proton-install/   proton-install script
-    ├── looni-wine-proton_hybrid_builder/
-    ├── looni-wine-neutron_hybrid_builder/
-    └── looni-winetoolz/        Modules + shared_lib/
+    ├── mythix-neutron_builder/  Engine scripts + patches/
+    ├── mythix-wine_builder/     Engine scripts + patches/
+    ├── mythix-neutron-install/  neutron-install script
+    ├── mythix-proton-install/   proton-install script
+    ├── mythix-wine-proton_hybrid_builder/
+    ├── mythix-wine-neutron_hybrid_builder/
+    └── mythix-winetoolz/        Modules + shared_lib/
 ```
 
 ### Runtime Data (created by scripts on first use)
 
 ```
 ~/.local/share/
-├── looni-wine_builder/
+├── mythix-wine_builder/
 │   ├── buildz/
 │   │   ├── install/            Completed Wine builds
 │   │   └── build-run/          In-progress build trees
 │   └── src/                    Git-cloned Wine sources
 │
-├── looni-neutron_builder/
+├── mythix-neutron_builder/
 │   ├── buildz/
 │   │   ├── install/            Completed Neutron packages
 │   │   └── build-run/          In-progress builds
 │   └── src/                    Git clones (proton-wine, dxvk, vkd3d-proton)
 │
-├── looni-proton_builder/
+├── mythix-proton_builder/
 │   ├── buildz/
 │   │   └── install/            Completed Proton builds (GE / TKG)
 │   └── src/                    Git clones (proton-ge-custom, wine-tkg-git)
 │
-├── looni-neutron-installs/     Managed Neutron installations (neutron-install)
+├── mythix-neutron-installs/     Managed Neutron installations (neutron-install)
 │   ├── my-neutron/
 │   │   ├── files/              Wine build + DXVK + VKD3D + Steam components
 │   │   ├── neutron             Python launcher
 │   │   ├── compatibilitytool.vdf
 │   │   ├── toolmanifest.vdf
-│   │   └── .looni-meta
+│   │   └── .mythix-meta
 │   └── ...
 │
-└── looni-wine-installs/        Managed Wine installations (Wine Install Manager)
+└── mythix-wine-installs/        Managed Wine installations (Wine Install Manager)
     ├── wine-staging-10.5/
     │   ├── bin/wine
     │   ├── lib/ lib64/ share/
-    │   └── .looni-meta         Version, source, install date
+    │   └── .mythix-meta         Version, source, install date
     └── wine-tkg-custom/
         └── ...
 ```
@@ -1200,7 +1200,7 @@ explicitly `make install PREFIX=/usr/local`.
 ### Configuration
 
 ```
-~/.config/looni-build/
+~/.config/mythix-build/
 ├── customization.cfg           wine-builder compile flags (never overwritten on reinstall)
 ├── neutron-customization.cfg   neutron-builder compile flags
 └── winetoolz.cfg               winetoolz preferences
@@ -1237,8 +1237,8 @@ The wine-builder and neutron-builder ship their own Containerfiles:
 
 | Builder | Containerfile | Image name |
 |---------|--------------|------------|
-| wine-builder | `looni-wine_builder/Containerfile` | `wine-builder` |
-| neutron-builder | `looni-neutron_builder/Containerfile.neutron` | `looni-neutron_builder` |
+| wine-builder | `mythix-wine_builder/Containerfile` | `wine-builder` |
+| neutron-builder | `mythix-neutron_builder/Containerfile.neutron` | `mythix-neutron_builder` |
 
 Podman (rootless) is strongly recommended. Docker works too — just drop the `:z`
 volume flags if SELinux is not in use.
@@ -1248,7 +1248,7 @@ volume flags if SELinux is not in use.
 **Build the image** (once):
 
 ```bash
-cd looni-wine_builder
+cd mythix-wine_builder
 
 podman build \
     --build-arg BUILD_USER="$(whoami)" \
@@ -1272,13 +1272,13 @@ podman run --rm -it \
 **Build the image** (once):
 
 ```bash
-cd looni-neutron_builder
+cd mythix-neutron_builder
 
 podman build \
     --build-arg BUILD_USER="$(whoami)" \
     --build-arg BUILD_UID="$(id -u)" \
     --build-arg BUILD_GID="$(id -g)" \
-    -t looni-neutron_builder \
+    -t mythix-neutron_builder \
     -f Containerfile.neutron .
 ```
 
@@ -1286,9 +1286,9 @@ podman build \
 
 ```bash
 podman run --rm -it \
-    -v "$(pwd)":/home/"$(whoami)"/looni-neutron_builder:z \
-    -v looni-neutron_builder-ccache:/home/"$(whoami)"/.ccache:z \
-    looni-neutron_builder \
+    -v "$(pwd)":/home/"$(whoami)"/mythix-neutron_builder:z \
+    -v mythix-neutron_builder-ccache:/home/"$(whoami)"/.ccache:z \
+    mythix-neutron_builder \
     bash neutron-builder.sh --source proton-wine
 ```
 
@@ -1358,7 +1358,7 @@ sudo pacman -S podman              # Arch
 | Package | Version | Used by |
 |---------|---------|---------|
 | `textual` | ≥ 0.80 | TUI launcher |
-| `click` | ≥ 8.1 | CLI (`looni` command) |
+| `click` | ≥ 8.1 | CLI (`mythix` command) |
 | `tkinter` | (stdlib) | GUI launcher (usually pre-installed) |
 | `pytest` | ≥ 8.0 | Test suite (dev only) |
 | `pytest-asyncio` | ≥ 0.23 | Async test support (dev only) |
@@ -1387,19 +1387,19 @@ make uninstall
 This removes all installed scripts and lib directories. You'll be asked whether to
 clean up `~/.bashrc` entries.
 
-**Config files** in `~/.config/looni-build/` are **kept** — remove manually if wanted.
+**Config files** in `~/.config/mythix-build/` are **kept** — remove manually if wanted.
 
-**Build output** in `~/.local/share/looni-wine_builder/`,
-`~/.local/share/looni-neutron_builder/`, and
-`~/.local/share/looni-proton_builder/` is **kept** — these are your compiled builds.
+**Build output** in `~/.local/share/mythix-wine_builder/`,
+`~/.local/share/mythix-neutron_builder/`, and
+`~/.local/share/mythix-proton_builder/` is **kept** — these are your compiled builds.
 
-**Managed Wine installs** in `~/.local/share/looni-wine-installs/` are **kept** —
+**Managed Wine installs** in `~/.local/share/mythix-wine-installs/` are **kept** —
 use the Wine Install Manager to remove individual builds first, or delete the
 directory manually.
 
-**Python frontend:** `pip uninstall looni-build` removes the Python package and the
-`looni` console script.
+**Python frontend:** `pip uninstall mythix-build` removes the Python package and the
+`mythix` console script.
 
 ---
 
-*looni edition — made with love :3*
+*mythix edition — made with love :3*
