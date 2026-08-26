@@ -1608,8 +1608,11 @@ if command -v python3 >/dev/null 2>&1; then PYTHON="python3"; else PYTHON="pytho
 export PYTHONPATH="${tool_root}:${tool_root}/protonfixes:${PYTHONPATH:-}"
 export STEAM_RUNTIME=1
 export PRESSURE_VESSEL=1
-export PROTON_DISABLE_VR=1
-export PROTON_NO_VR=1
+# VR disabled by default — set NEUTRON_VR=1 to enable SteamVR/OpenXR
+if [ "${NEUTRON_VR:-0}" != "1" ]; then
+    export PROTON_DISABLE_VR=1
+    export PROTON_NO_VR=1
+fi
 export PROTON_CRASH_REPORT_DISABLE=1
 export WINEDLLOVERRIDES="beclient=n,b;beclient_x64=n,b;${WINEDLLOVERRIDES:-}"
 

@@ -10,8 +10,8 @@
 #   NEUTRON_PACKAGE_DIR  — root of the Proton package being assembled
 #
 # DXVK output layout inside the Proton package:
-#   files/lib/wine/dxvk/   — 32-bit .dll files (d3d9, d3d10*, d3d11, dxgi)
-#   files/lib64/wine/dxvk/ — 64-bit .dll files
+#   files/lib/wine/dxvk/x32/ — 32-bit .dll files (d3d9, d3d10*, d3d11, dxgi)
+#   files/lib/wine/dxvk/x64/ — 64-bit .dll files
 #
 # HOW THIS WORKS:
 #   DXVK bundles its own Vulkan, SPIRV, and DirectX headers as git submodules
@@ -49,8 +49,8 @@ sep()  { printf "\n${_BLU}${_B}── %s ──${_R}\n" "$*"; }
     err "meson.build not found in: $DXVK_SOURCE_DIR"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DXVK_DEST_32="${NEUTRON_PACKAGE_DIR}/files/lib/wine/dxvk"
-DXVK_DEST_64="${NEUTRON_PACKAGE_DIR}/files/lib64/wine/dxvk"
+DXVK_DEST_32="${NEUTRON_PACKAGE_DIR}/files/lib/wine/dxvk/x32"
+DXVK_DEST_64="${NEUTRON_PACKAGE_DIR}/files/lib/wine/dxvk/x64"
 BUILD_DIR_32="${DXVK_SOURCE_DIR}/build/x32"
 BUILD_DIR_64="${DXVK_SOURCE_DIR}/build/x64"
 DXVK_INCLUDE_DIR="${DXVK_SOURCE_DIR}/include"

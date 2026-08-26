@@ -95,8 +95,19 @@ _HUD_LAST_FILE=""
 _draw_bar() {
     local cur="$1" tot="$2" label="$3" start="${4:-0}" eta="${5:-0}"
 
+    # ── Terminal width — scale bar to fit without wrapping ───────────────
+    local term_cols=80
+    if [ -e /dev/tty ]; then
+        term_cols=$(stty size < /dev/tty 2>/dev/null | cut -d' ' -f2)
+        [ -z "$term_cols" ] || [ "$term_cols" -lt 40 ] 2>/dev/null && term_cols=80
+    fi
+    # Bar width: reserve ~45 chars for metadata, clamp to [10, 50]
+    local width=$(( term_cols - 50 ))
+    [ "$width" -lt 10 ] && width=10
+    [ "$width" -gt 50 ] && width=50
+
     # ── Bar ──────────────────────────────────────────────────────────────
-    local width=30 filled pct bar="" i=0
+    local filled pct bar="" i=0
     if [ "$tot" -eq 0 ]; then
         local now_s; now_s=$(date +%s)
         local tick=$(( (now_s - start) % 10 ))
@@ -136,17 +147,23 @@ _draw_bar() {
 
     # ── Warn/error suffix ────────────────────────────────────────────────
     local issues=""
-    [ "$_HUD_ERRORS"   -gt 0 ] && issues=" ${_RED}${_HUD_ERRORS}err${_R}"
-    [ "$_HUD_WARNINGS" -gt 0 ] && issues="${issues} ${_YLW}${_HUD_WARNINGS}warn${_R}"
+    [ "$_HUD_ERRORS"   -gt 0 ] && issues=" ${_HUD_ERRORS}err"
+    [ "$_HUD_WARNINGS" -gt 0 ] && issues="${issues} ${_HUD_WARNINGS}warn"
 
-    # ── Truncate filename to fit ─────────────────────────────────────────
+    # ── Truncate filename to fit remaining space ─────────────────────────
     local fname="$_HUD_LAST_FILE"
-    [ "${#fname}" -gt 20 ] && fname="…${fname: -19}"
+    local max_fname=$(( term_cols - width - 45 ))
+    [ "$max_fname" -lt 5 ] && max_fname=5
+    [ "${#fname}" -gt "$max_fname" ] && fname="…${fname: -(( max_fname - 1 ))}"
 
-    # ── Single-line draw ─────────────────────────────────────────────────
+    # ── Single-line draw — hard-truncate to terminal width ───────────────
     {
-        printf "\r\033[K  ${_MAG}[%s]${_R} %3s%%  ${_DIM}%d/%d${_R}  ${_CYN}%s${_R}  ${_CYN}%s${_R}  ${_DIM}%s${_R}%s" \
-            "$bar" "$pct" "$cur" "$tot" "$elapsed_str" "$eta_str" "$fname" "$issues"
+        local raw
+        raw=$(printf "  [%s] %3s%%  %d/%d  %s  %s  %s%s" \
+            "$bar" "$pct" "$cur" "$tot" "$elapsed_str" "$eta_str" "$fname" "$issues")
+        # Strip to term_cols visible chars to prevent any wrapping
+        raw="${raw:0:$term_cols}"
+        printf "\r\033[K%s" "$raw"
     } > /dev/tty
 }
 
@@ -446,7 +463,7 @@ sep "Source compatibility fixes"
 # unconditionally but the function is only compiled when SDL is enabled.
 # Only applies to proton-wine-experimental where we force --without-sdl.
 _BUS_UDEV="${WINE_SOURCE_DIR}/dlls/winebus.sys/bus_udev.c"
-if [ -f "$_BUS_UDEV" ]; then
+if [ -f "$_BUS_UDEV" ] && [ "${NEUTRON_SOURCE_KEY}" != "mythix-wine" ]; then
     if grep -q 'is_sdl_ignored_device' "$_BUS_UDEV" && \
        ! grep -q 'SDL callsite patched' "$_BUS_UDEV"; then
         msg2 "Patching is_sdl_ignored_device call site in bus_udev.c ..."
@@ -501,7 +518,14 @@ case "${NEUTRON_SOURCE_KEY}" in
         # Valve's bleeding-edge fork has its own SDL input stack — the standard
         # --with-sdl configure path conflicts with it.
         _args_common+=( "--without-sdl" )
-        msg2 "Experimental source: SDL disabled (Valve uses its own input stack)"
+        msg2 "Bleeding-edge source: SDL disabled (Valve uses its own input stack)"
+        ;;
+    mythix-wine)
+        # Mythix: SDL2 enabled so winebus.sys bus_sdl backend gives standalone
+        # controller support (no Steam Input needed). Container ships
+        # libsdl2-dev + libsdl2-dev:i386; bus_sdl.c provides is_sdl_ignored_device.
+        _args_common+=( "--with-sdl" )
+        msg2 "Mythix source: SDL2 enabled (winebus bus_sdl controller backend)"
         ;;
     kron4ek-tkg)
         # Kron4ek's wine-tkg tracks mainline Wine + Staging + TKG patchset.

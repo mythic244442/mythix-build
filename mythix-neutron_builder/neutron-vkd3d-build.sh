@@ -10,8 +10,8 @@
 #   NEUTRON_PACKAGE_DIR  — root of the Proton package being assembled
 #
 # VKD3D-Proton output layout inside the Proton package:
-#   files/lib/wine/vkd3d-proton/   — 32-bit d3d12.dll + d3d12core.dll
-#   files/lib64/wine/vkd3d-proton/ — 64-bit d3d12.dll + d3d12core.dll
+#   files/lib/wine/vkd3d-proton/i386-windows/      — 32-bit d3d12.dll + d3d12core.dll
+#   files/lib/wine/vkd3d-proton/x86_64-windows/   — 64-bit d3d12.dll + d3d12core.dll
 #
 # widl (Wine's IDL compiler) is required and is taken from the built Wine
 # install inside NEUTRON_PACKAGE_DIR/files/bin/widl.
@@ -44,8 +44,8 @@ sep()  { printf "\n${_BLU}${_B}── %s ──${_R}\n" "$*"; }
     err "meson.build not found in: $VKD3D_SOURCE_DIR"
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-VKD3D_DEST_32="${NEUTRON_PACKAGE_DIR}/files/lib/wine/vkd3d-proton"
-VKD3D_DEST_64="${NEUTRON_PACKAGE_DIR}/files/lib64/wine/vkd3d-proton"
+VKD3D_DEST_32="${NEUTRON_PACKAGE_DIR}/files/lib/wine/vkd3d-proton/i386-windows"
+VKD3D_DEST_64="${NEUTRON_PACKAGE_DIR}/files/lib/wine/vkd3d-proton/x86_64-windows"
 BUILD_DIR_32="${VKD3D_SOURCE_DIR}/build/x32"
 BUILD_DIR_64="${VKD3D_SOURCE_DIR}/build/x64"
 VKD3D_INCLUDE_DIR="${VKD3D_SOURCE_DIR}/include"

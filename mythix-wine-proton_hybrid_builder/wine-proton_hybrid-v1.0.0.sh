@@ -1373,7 +1373,26 @@ done
 tool_root="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
 
 # =============================================================================
-# 2. Locate the internal dist directory  (files/  or  dist/)
+# 2. Fast Steam/Proton-mode handoff
+# =============================================================================
+# In Steam compatibility-tool mode the python launcher owns environment setup and
+# Wine payload resolution. Do this before requiring files/ or dist/ so script-
+# harness installs (proton -> proton-wrapper + proton.py) do not die before the
+# real launcher can inspect STEAM_COMPAT_TOOL_PATHS / compatdata / payload hints.
+if [ "$#" -ge 1 ] && [ "$1" != "run" ]; then
+  py_launcher="${tool_root}/proton.py"
+  if [ ! -f "$py_launcher" ]; then
+    echo "ERROR: Mythix python launcher not found: ${py_launcher}" >&2
+    exit 1
+  fi
+  if command -v python3 >/dev/null 2>&1; then PYTHON="python3"; else PYTHON="python"; fi
+  export STEAM_COMPAT_CLIENT_INSTALL_PATH="${STEAM_COMPAT_CLIENT_INSTALL_PATH:-${HOME}/.steam/steam}"
+  export PROTON_CRASH_REPORT_DISABLE="${PROTON_CRASH_REPORT_DISABLE:-1}"
+  exec "$PYTHON" "$py_launcher" "$@"
+fi
+
+# =============================================================================
+# 3. Locate the internal dist directory  (files/  or  dist/)
 # =============================================================================
 if   [ -d "${tool_root}/dist"  ]; then dist_dir="${tool_root}/dist"
 elif [ -d "${tool_root}/files" ]; then dist_dir="${tool_root}/files"
@@ -1608,8 +1627,11 @@ if command -v python3 >/dev/null 2>&1; then PYTHON="python3"; else PYTHON="pytho
 export PYTHONPATH="${tool_root}:${tool_root}/protonfixes:${PYTHONPATH:-}"
 export STEAM_RUNTIME=1
 export PRESSURE_VESSEL=1
-export PROTON_DISABLE_VR=1
-export PROTON_NO_VR=1
+# VR disabled by default — set NEUTRON_VR=1 to enable SteamVR/OpenXR
+if [ "${NEUTRON_VR:-0}" != "1" ]; then
+    export PROTON_DISABLE_VR=1
+    export PROTON_NO_VR=1
+fi
 export PROTON_CRASH_REPORT_DISABLE=1
 export WINEDLLOVERRIDES="beclient=n,b;beclient_x64=n,b;${WINEDLLOVERRIDES:-}"
 
