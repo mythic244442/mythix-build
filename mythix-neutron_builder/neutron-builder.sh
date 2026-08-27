@@ -4252,7 +4252,7 @@ AFUNIX_EOF
     # Replace with Mythix branding and direct bug reports to us, not TkG/WineHQ.
     _configure_ac="${WINE_SOURCE_DIR}/configure.ac"
     if [ -f "$_configure_ac" ]; then
-        # Replace the version suffix: "( TkG ... )" → "( Mythix Esync Fsync )"
+        # Replace the version suffix: "( TkG ... )" → "(Mythix Wine)"
         sed -i 's/( TkG[^)]*)/(Mythix Wine)/' "$_configure_ac"
         # Replace any wine-tkg bug report URL with ours
         sed -i 's|https://github.com/Frogging-Family/wine-tkg-git/issues|https://github.com/mythix-org/mythix-build/issues|g' "$_configure_ac"

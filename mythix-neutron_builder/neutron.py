@@ -445,7 +445,7 @@ class Neutron:
         if self.missing_default_prefix():
             return False
         # A legacy shipped template is usable but should be regenerated once so
-        # future launches have positive proof that Mythix Neutron created it.
+        # future launches have positive proof that Neutron created it.
         if not self._default_prefix_valid():
             return True
         reg_mtime = mtime_str(self.default_pfx_dir, "system.reg")
@@ -833,17 +833,17 @@ class CompatData:
                     if tracked_name not in prev_tracked:
                         tracked_files.write(tracked_name + "\n")
 
-    # — versioned Mythix Neutron prefix initialization / upgrades —
+    # — versioned Neutron prefix initialization / upgrades —
     def upgrade_pfx(self, old_ver):
         if old_ver == CURRENT_PREFIX_VERSION:
             return
 
         if old_ver is None:
-            log(f"Initializing Mythix Neutron prefix "
+            log(f"Initializing Neutron prefix "
                 f"({CURRENT_PREFIX_VERSION}) ({self.compat_data})")
             return  # fresh prefix, nothing to migrate
 
-        log(f"Mythix Neutron: upgrading prefix from {old_ver} to "
+        log(f"Neutron: upgrading prefix from {old_ver} to "
             f"{CURRENT_PREFIX_VERSION} ({self.compat_data})")
 
         old = parse_prefix_version(old_ver)
