@@ -96,7 +96,7 @@ def die(msg):
 # "<build timestamp> <version>", last token wins) via load_prefix_version()
 # so mythix-build stamps it at package time and the script never drifts.
 # This constant is only the fallback for missing/unparseable version files.
-FALLBACK_PREFIX_VERSION = "Mythix_Neutron-11.11-x86_64"
+FALLBACK_PREFIX_VERSION = "mythix-neutron-0.0"
 CURRENT_PREFIX_VERSION = FALLBACK_PREFIX_VERSION
 PREFIX_VERSION_SOURCE = "fallback"
 

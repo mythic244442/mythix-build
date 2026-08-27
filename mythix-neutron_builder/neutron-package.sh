@@ -483,7 +483,10 @@ ok "neutron launcher installed ($(wc -l < "$_launcher_src") lines)"
 # ══════════════════════════════════════════════════════════════════════════════
 _version_str="${BUILD_NAME}"
 if [ -n "$_wine_ver" ] && [ "$_wine_ver" != "unknown" ]; then
-    _version_str="${BUILD_NAME}-${_wine_ver#wine-}"
+    # Strip "wine-" prefix and anything after the version number
+    # e.g. "wine-11.16 (Staging)" -> "11.16", "wine-10.17.r0.gabcdef" -> "10.17"
+    _clean_ver="$(printf '%s' "${_wine_ver#wine-}" | sed 's/[[:space:]].*//' | grep -oP '^\d+\.\d+')"
+    [ -n "$_clean_ver" ] && _version_str="${BUILD_NAME}-${_clean_ver}"
 fi
 printf '%s %s\n' "$(date +%s)" "$_version_str" > "${NEUTRON_PACKAGE_DIR}/version"
 ok "version file written: $_version_str"
