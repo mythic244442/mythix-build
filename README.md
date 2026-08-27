@@ -65,7 +65,7 @@ and a tool catalogue.
 ## Quick Start
 
 ```bash
-git clone https://github.com/blu2442/mythix-build
+git clone https://github.com/mythic244442/mythix-build
 cd mythix-build
 make install            # installs to ~/.local (adds PATH to ~/.bashrc)
 source ~/.bashrc
@@ -331,8 +331,8 @@ neutron-builder --source kron4ek-tkg             # Kron4ek wine-tkg + ntsync
 neutron-builder --patches all                    # apply all patch groups
 neutron-builder --patches custom                 # apply specific groups
 neutron-builder --sniper                         # enable Steam Runtime Sniper container
-neutron-builder --dxvk dxvk-release              # download pre-built DXVK (skip compile)
-neutron-builder --vkd3d vkd3d-proton-release     # download pre-built VKD3D-Proton
+neutron-builder --dxvk dxvk                      # compile DXVK from source (instead of downloading)
+neutron-builder --vkd3d vkd3d-proton             # compile VKD3D-Proton from source
 neutron-builder --dxvk-only                      # rebuild DXVK only, skip Wine
 neutron-builder --vkd3d-only                     # rebuild VKD3D-Proton only
 neutron-builder --reinstall-components           # re-package without rebuilding
@@ -391,15 +391,15 @@ GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
 
 | DXVK Key | Description |
 |----------|-------------|
-| `dxvk` | Standard DXVK — D3D9/10/11 → Vulkan, compiled from source (default) |
+| `dxvk-release` | Pre-built DXVK DLLs from GitHub releases (default, fastest) |
+| `dxvk` | Standard DXVK — D3D9/10/11 → Vulkan, compiled from source (requires MinGW) |
 | `dxvk-async` | DXVK + async pipeline compilation, compiled from source |
-| `dxvk-release` | Pre-built DXVK DLLs from GitHub releases (fastest, no compile) |
 | `none` | Skip DXVK (falls back to WineD3D) |
 
 | VKD3D Key | Description |
 |-----------|-------------|
-| `vkd3d-proton` | VKD3D-Proton — D3D12 → Vulkan, compiled from source (default) |
-| `vkd3d-proton-release` | Pre-built VKD3D-Proton DLLs from GitHub releases (fastest) |
+| `vkd3d-proton-release` | Pre-built VKD3D-Proton DLLs from GitHub releases (default, fastest) |
+| `vkd3d-proton` | VKD3D-Proton — D3D12 → Vulkan, compiled from source (requires MinGW) |
 | `none` | Skip VKD3D-Proton (D3D12 games won't work) |
 
 #### Full CLI Reference
@@ -409,8 +409,8 @@ GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
 | `--source NAME` | Wine source key |
 | `--branch BRANCH` | Pin proton-wine to a specific branch |
 | `--no-pull` | Skip `git pull` |
-| `--dxvk NAME` | DXVK variant (`dxvk` \| `dxvk-async` \| `none`) |
-| `--vkd3d NAME` | VKD3D variant (`vkd3d-proton` \| `none`) |
+| `--dxvk NAME` | DXVK variant (`dxvk-release` \| `dxvk` \| `dxvk-async` \| `none`) |
+| `--vkd3d NAME` | VKD3D variant (`vkd3d-proton-release` \| `vkd3d-proton` \| `none`) |
 | `--dxvk-branch BRANCH` | Pin DXVK to specific tag |
 | `--vkd3d-branch BRANCH` | Pin VKD3D-Proton to specific tag |
 | `--name NAME` | Build name (default: `mythix-neutron-<ver>`) |
@@ -477,6 +477,10 @@ to do. `neutron` handles all standard Proton verbs:
 | `getcompatpath` | Convert a Unix path to a Windows path (printed to stdout) |
 | `getnativepath` | Convert a Windows path to a Unix path (printed to stdout) |
 | `stop` | Kill the wineserver for this prefix |
+| `createprefix` | Create a prefix using a base Proton, then overlay Neutron DLLs (`--proton PATH`) |
+| `destroyprefix` | Remove exactly the files Neutron installed (tracked-files manifest) |
+| `makedefaultpfx` | (Re)create the prefix template (`--force` to regenerate) |
+| `diag` | Print resolved configuration without launching anything (`--full-env` for all vars) |
 
 **Sync primitive auto-detection.** The launcher inspects the `wineserver` binary for
 compiled-in sync support and enables the best available mode automatically — no
@@ -507,23 +511,24 @@ tuning that you'd otherwise have to set manually:
 **Prefix initialization on first launch.** When a game runs for the first time in a
 fresh prefix (no `system.reg` present), `neutron` automatically:
 
-1. Runs `wineboot --init` to bootstrap the Wine prefix.
-2. Copies DXVK DLLs (`d3d9.dll`, `d3d10*.dll`, `d3d11.dll`, `dxgi.dll`) into the
-   prefix's `system32/` and `syswow64/`.
-3. Copies VKD3D-Proton DLLs (`d3d12.dll`, `d3d12core.dll`) into the prefix.
+1. Creates a default prefix template by running `wineboot --init` once (cached for
+   future launches — subsequent prefixes clone from it via symlinks + reflink copies).
+2. Clones the template into the game's prefix with a unique MachineGuid.
+3. Overlays DXVK DLLs (`d3d9.dll`, `d3d10*.dll`, `d3d11.dll`, `dxgi.dll`) and
+   VKD3D-Proton DLLs (`d3d12.dll`, `d3d12core.dll`) into the prefix, tracked by a
+   manifest so `destroyprefix` can cleanly remove them.
+4. Installs Steam client DLLs, NVIDIA nvngx/DLSS DLLs, and VR client DLLs as needed.
+5. Sets up DOS drives, OpenVR paths, and the `.update-timestamp` suppressor.
 
 This means DXVK and VKD3D-Proton are active from the very first game launch with no
 manual setup step.
 
 **WINEDLLOVERRIDES — forcing native over builtin.** The launcher sets:
 
-- DXVK overrides (`d3d9=n,b`, `d3d10=n,b`, `d3d11=n,b`, `dxgi=n,b`) — only when
-  DXVK DLLs are actually present in the package.
-- VKD3D-Proton overrides (`d3d12=n,b`, `d3d12core=n,b`) — only when present.
-- Steam bridge overrides (`lsteamclient=n,b`, `steamclient=n,b`).
-- OpenVR DLLs disabled (`openvr_api_dxvk=disabled`, `vrclient_x64=disabled`,
-  `vrclient=disabled`) — prevents assertion crashes in games that have OpenVR
-  bundled even when not using VR.
+- Graphics DLL overrides (`d3d9=n,b`, `d3d10core=n,b`, `d3d11=n,b`, `dxgi=n,b`,
+  `d3d8=n,b`, `d3d12=n,b`, `d3d12core=n,b`) — ensures DXVK and VKD3D-Proton DLLs
+  take priority over Wine builtins.
+- Steam bridge override (`lsteamclient=n,b`).
 
 #### Patch System
 
