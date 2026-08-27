@@ -475,6 +475,18 @@ cp -f "$_launcher_src" "${NEUTRON_PACKAGE_DIR}/neutron"
 chmod +x "${NEUTRON_PACKAGE_DIR}/neutron"
 ok "neutron launcher installed ($(wc -l < "$_launcher_src") lines)"
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Write version file (read by the Python launcher for prefix versioning)
+#
+#  Format: "<timestamp> <build-name>"  — the launcher takes the last token
+#  as the prefix schema version via load_prefix_version().
+# ══════════════════════════════════════════════════════════════════════════════
+_version_str="${BUILD_NAME}"
+if [ -n "$_wine_ver" ] && [ "$_wine_ver" != "unknown" ]; then
+    _version_str="${BUILD_NAME}-${_wine_ver#wine-}"
+fi
+printf '%s %s\n' "$(date +%s)" "$_version_str" > "${NEUTRON_PACKAGE_DIR}/version"
+ok "version file written: $_version_str"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Write a minimal README inside the package

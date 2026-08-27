@@ -70,6 +70,7 @@ NEUTRON_LIBS := \
     neutron-vkd3d-build.sh \
     neutron-package.sh \
     neutron-patcher.sh \
+    neutron.py \
     dxvk.conf \
     vkd3d-proton.conf \
     spinner.sh \
