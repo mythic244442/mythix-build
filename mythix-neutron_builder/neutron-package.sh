@@ -99,10 +99,11 @@ if [ "${SNIPER_MODE:-false}" = "true" ]; then
     cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << 'EOF'
 "manifest"
 {
-  "manifest_version"   "2"
-  "commandline"        "/neutron waitforexitandrun"
-  "use_sessions"       "1"
+  "version" "2"
+  "commandline" "/neutron %verb%"
+  "use_sessions" "1"
   "require_tool_appid" "1391110"
+  "compatmanager_layer_name" "neutron"
 }
 EOF
     ok "toolmanifest.vdf written (Sniper mode — Steam Runtime 3.0 container)"
@@ -110,9 +111,10 @@ else
     cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << 'EOF'
 "manifest"
 {
-  "manifest_version"   "2"
-  "commandline"        "/neutron waitforexitandrun"
-  "use_sessions"       "1"
+  "version" "2"
+  "commandline" "/neutron %verb%"
+  "use_sessions" "1"
+  "compatmanager_layer_name" "neutron"
 }
 EOF
     ok "toolmanifest.vdf written (standard host mode)"
