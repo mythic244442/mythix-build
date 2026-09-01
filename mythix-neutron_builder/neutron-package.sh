@@ -521,7 +521,6 @@ Then open a game's Properties → Compatibility and select **${_display_name}**.
 ## Built with
 
 - [mythix-neutron_builder](https://github.com/blu2442/mythix-neutron_builder)
-- [ValveSoftware/wine](https://github.com/ValveSoftware/wine)
 EOF
 ok "README written"
 
