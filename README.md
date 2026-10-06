@@ -437,7 +437,7 @@ GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
 #### How neutron Works
 
 neutron-builder assembles a **self-contained Neutron package** — the same
-kind of package that Valve ships as GE-Proton or Proton Experimental. The key
+kind of package that Valve ships as Proton. The key
 difference from a regular Wine build is that every component is compiled to run
 inside Steam's Proton infrastructure:
 
