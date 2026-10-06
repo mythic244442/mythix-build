@@ -36,6 +36,11 @@
 # prefixes by the tracked runtime overlay.  `wined3d` disables DXVK injection;
 # VKD3D-Proton remains available for D3D12.
 #
+# Per-build curation: BUILD_PROFILES (keyed by the version-file tag, or
+# NEUTRON_PROFILE) records what each Wine build needs — like Valve shipping a
+# proton script per Proton version. Bundled DXVK/VKD3D-Proton DLLs are PE-
+# validated before overlay; `diag` reports their health and the active profile.
+#
 # Control knobs are NEUTRON_* (the proton bundle reads PROTON_* via rebrand).
 
 import array
@@ -100,7 +105,10 @@ FALLBACK_PREFIX_VERSION = "mythix-neutron-0.0"
 CURRENT_PREFIX_VERSION = FALLBACK_PREFIX_VERSION
 PREFIX_VERSION_SOURCE = "fallback"
 
-_PREFIX_VERSION_RE = re.compile(r"^\s*(.*?)-?(\d+)\.(\d+)(?:-(\d+))?\s*$")
+# Accepts "<tag>-MAJ.MIN[-REV]" and the builder's git-describe form
+# "<tag>-MAJ.MIN.r<REV>.g<hash>" (e.g. Mythix-Neutron-10.17.r0.gf686957b).
+_PREFIX_VERSION_RE = re.compile(
+    r"^\s*(.*?)-?(\d+)\.(\d+)(?:-(\d+)|\.r(\d+))?(?:\.g[0-9a-f]+)?\s*$")
 
 
 def parse_prefix_version(ver):
@@ -111,7 +119,7 @@ def parse_prefix_version(ver):
     if not m:
         return None
     return (m.group(1), int(m.group(2)), int(m.group(3)),
-            int(m.group(4) or 0))
+            int(m.group(4) or m.group(5) or 0))
 
 
 def load_prefix_version(version_file):
@@ -130,6 +138,62 @@ def load_prefix_version(version_file):
     else:
         log(f"warning: unparseable version file ({version_file}); "
             f"using fallback prefix schema {CURRENT_PREFIX_VERSION}")
+
+
+# ── Build profiles — per-Wine-build curation, like Valve's per-version proton ─
+# Selected from the version tag (case-insensitive prefix match); NEUTRON_PROFILE
+# overrides. Keep facts about a build here rather than scattering if/elses.
+BUILD_PROFILES = {
+    # Mythix Neutron 10.x: Valve bleeding-edge proton-wine + staging/TkG/GE,
+    # classic multilib (has wine64), esync/fsync only (no ntsync yet).
+    "mythix-neutron-10": dict(
+        description="Mythix Neutron 10.x (proton-wine bleeding-edge base)",
+        wine_tree="proton",
+        ntsync=False,               # build targets e/fsync; never opt into ntsync
+        d3d_override="n",           # DXVK/VKD3D native-only, exactly like Proton
+        proton_env=True,            # proton-wine reads PROTON_* + WINE_* knobs
+        env_defaults={
+            "WINE_LARGE_ADDRESS_AWARE": "1",
+            "WINE_GST_REGISTRY_DIR": "",   # filled per-prefix in init_session
+        },
+    ),
+    # Anything else (upstream / tkg / kron4ek style unified builds)
+    "generic": dict(
+        description="generic Wine build",
+        wine_tree="upstream",
+        ntsync=True,
+        d3d_override="n,b",
+        proton_env=False,
+        env_defaults={},
+    ),
+}
+ACTIVE_PROFILE = "generic"
+
+
+def select_build_profile(version_string):
+    """Pick the profile whose key prefixes the version tag (longest wins)."""
+    global ACTIVE_PROFILE
+    forced = os.environ.get("NEUTRON_PROFILE")
+    if forced in BUILD_PROFILES:
+        ACTIVE_PROFILE = forced
+        return
+    parsed = parse_prefix_version(version_string)
+    if parsed:
+        ident = f"{parsed[0]}-{parsed[1]}.{parsed[2]}".lower()
+    else:
+        ident = (version_string or "").lower()
+    best = ""
+    for key in BUILD_PROFILES:
+        if key == "generic" or len(key) <= len(best):
+            continue
+        if ident == key or (ident.startswith(key)
+                            and ident[len(key)] in ".-"):
+            best = key
+    ACTIVE_PROFILE = best or "generic"
+
+
+def profile():
+    return BUILD_PROFILES[ACTIVE_PROFILE]
 
 
 # Symlink-target directories that mark a prefix DLL as a Wine builtin.
@@ -289,6 +353,66 @@ def file_is_wine_builtin_dll(path):
         return tag.startswith((b"Wine placeholder DLL", b"Wine builtin DLL"))
     except OSError:
         return False
+
+
+# ── PE header probe: catches corrupt/mismatched bundled DLLs before they're
+#    overlaid into a prefix (a bad d3d11/dxgi kills every DX game at launch) ──
+PE_MACHINE = {0x14c: "x86", 0x8664: "x64", 0xaa64: "arm64"}
+
+
+def pe_info(path):
+    """-> dict(ok, machine, size, error) for a PE file."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, "rb") as f:
+            if f.read(2) != b"MZ":
+                return dict(ok=False, machine=None, size=size,
+                            error="not a PE file (no MZ header)")
+            f.seek(0x3c)
+            e_lfanew = int.from_bytes(f.read(4), "little")
+            if e_lfanew <= 0 or e_lfanew + 6 > size:
+                return dict(ok=False, machine=None, size=size,
+                            error="truncated (bad e_lfanew)")
+            f.seek(e_lfanew)
+            if f.read(4) != b"PE\0\0":
+                return dict(ok=False, machine=None, size=size,
+                            error="missing PE signature")
+            coff = f.read(20)
+            machine = int.from_bytes(coff[0:2], "little")
+            nsections = int.from_bytes(coff[2:4], "little")
+            opt_size = int.from_bytes(coff[16:18], "little")
+            # body truncation: every section's raw data must fit in the file
+            f.seek(e_lfanew + 24 + opt_size)
+            end = 0
+            for _ in range(nsections):
+                sec = f.read(40)
+                if len(sec) < 40:
+                    return dict(ok=False, machine=None, size=size,
+                                error="truncated (section table)")
+                raw_size = int.from_bytes(sec[16:20], "little")
+                raw_ptr = int.from_bytes(sec[20:24], "little")
+                end = max(end, raw_ptr + raw_size)
+            if end > size:
+                return dict(ok=False, machine=None, size=size,
+                            error=f"truncated ({size} of {end} bytes)")
+        return dict(ok=True, machine=PE_MACHINE.get(machine, hex(machine)),
+                    size=size, error=None)
+    except OSError as e:
+        return dict(ok=False, machine=None, size=0, error=str(e))
+
+
+def check_translation_dll(path, expect_machine):
+    """None when the DLL is sane for its directory, else a reason string."""
+    info = pe_info(path)
+    if not info["ok"]:
+        return info["error"]
+    if info["machine"] != expect_machine:
+        return f"wrong architecture ({info['machine']}, expected {expect_machine})"
+    if info["size"] < 65536:
+        return f"implausibly small ({info['size']} bytes)"
+    if file_is_wine_builtin_dll(path):
+        return "is a Wine builtin/placeholder, not a translation DLL"
+    return None
 
 
 # ── Minimal advisory file lock (no third-party dependency) ───────────────────
@@ -473,21 +597,14 @@ class Neutron:
             backup = self.default_pfx_dir + ".previous"
             shutil.rmtree(temp, ignore_errors=True)
             try:
-                # Prefix templates are Wine installation state, not game state.
-                # Do not let Steam overlay, anti-cheat, DXVK, or inherited Wine
-                # search paths participate in wineboot: they can make the same
-                # Wine binaries fail here while working perfectly when invoked
-                # directly.  Keep ordinary host/session variables and the
-                # selected sync backend, but make Wine's own runtime paths
-                # authoritative for template construction.
+                # Strip vars that can interfere with wineboot during
+                # prefix template creation.
                 env = dict(base_env)
                 for key in (
                     "WINEDLLPATH", "WINEDLLOVERRIDES", "WINEARCH",
                     "LD_PRELOAD", "DXVK_CONFIG_FILE", "DXVK_LOG_LEVEL",
                     "DXVK_STATE_CACHE", "DXVK_HDR", "DXVK_ASYNC",
                     "DXVK_ENABLE_NVAPI", "VKD3D_CONFIG", "VKD3D_DEBUG",
-                    "PROTON_BATTLEYE_RUNTIME", "PROTON_EAC_RUNTIME",
-                    "NEUTRON_BATTLEYE_RUNTIME", "NEUTRON_EAC_RUNTIME",
                 ):
                     env.pop(key, None)
                 env["WINEPREFIX"] = temp
@@ -598,6 +715,10 @@ class CompatData:
         self.version_file = os.path.join(self.compat_data, "version")
         self.config_info_file = os.path.join(self.compat_data, "config_info")
         self.tracked_files_file = os.path.join(self.compat_data, "tracked_files")
+        # Which translation DLLs Neutron itself placed (rel, size, mtime), so a
+        # re-overlay only replaces our own copies and never a user's install.
+        self.translation_files_file = os.path.join(self.compat_data,
+                                                   "translation_files")
         # Written (fsynced) only after the template clone fully completes, so
         # a half-copied prefix from a crash/power-loss is detected and redone.
         self.creation_sync_guard = os.path.join(self.prefix,
@@ -628,9 +749,10 @@ class CompatData:
         steam_dir = "drive_c/Program Files (x86)/Steam/"
         makedirs(os.path.join(self.prefix, steam_dir))
         legacy = os.path.join(self.steam_root, "legacycompat")
+        # steamclient{,64}.dll deliberately excluded — Valve's native
+        # builds cause an ABI mismatch with Wine's lsteamclient.dll thunk,
+        # crashing titles like Cyberpunk 2077 with an access violation.
         copies = [
-            ("steamclient.dll", "steamclient.dll"),
-            ("steamclient64.dll", "steamclient64.dll"),
             ("GameOverlayRenderer64.dll", "GameOverlayRenderer64.dll"),
             ("GameOverlayRenderer.dll", "GameOverlayRenderer.dll"),
             ("SteamService.exe", "steam.exe"),
@@ -643,41 +765,94 @@ class CompatData:
                          track_file=track_file)
 
     # — bundled Direct3D translation layers (tracked) —
+    def _read_translation_manifest(self):
+        ours = {}
+        try:
+            with open(self.translation_files_file) as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) == 3:
+                        ours[parts[0]] = (int(parts[1]), int(parts[2]))
+        except (OSError, ValueError):
+            pass
+        return ours
+
+    def _is_our_translation_dll(self, rel, ours):
+        """True when the file at rel is byte-for-byte the copy Neutron placed
+        (size+mtime recorded at install; try_copy preserves the source mtime).
+        A user-replaced DLL differs and is preserved."""
+        if rel not in ours:
+            return False
+        try:
+            st = os.stat(os.path.join(self.prefix, rel))
+        except OSError:
+            return False
+        return (st.st_size, int(st.st_mtime)) == ours[rel]
+
     def _install_translation_dlls(self, session, track_file=None):
         n = session.neutron
         installed = []
-        prev_tracked = set()
-        try:
-            with open(self.tracked_files_file) as tf:
-                prev_tracked = {line.strip() for line in tf}
-        except OSError:
-            pass
+        ours = self._read_translation_manifest()
 
         def install(src, dst_dir, dll):
             rel = dst_dir + "/" + dll
             dst = os.path.join(self.prefix, rel)
-            # Preserve unmanaged native DLLs on an existing prefix.  Wine
-            # builtins and files already owned by Neutron are safe to replace.
+            expect = "x64" if dst_dir.endswith("system32") else "x86"
+            problem = check_translation_dll(src, expect)
+            if problem:
+                log(f"WARNING: skipping bundled {os.path.relpath(src, n.dir)}: "
+                    f"{problem} — prefix keeps its current {dll}")
+                return
+            # Replace Wine builtins and our own earlier copies; anything else
+            # is a user-installed native DLL (winetricks, manual) — keep it.
             if file_exists(dst, follow_symlinks=False) and \
-                    rel not in prev_tracked and not file_is_wine_builtin_dll(dst):
+                    not file_is_wine_builtin_dll(dst) and \
+                    not self._is_our_translation_dll(rel, ours):
                 log(f"preserving user-native graphics DLL: {rel}")
                 return
             makedirs(os.path.join(self.prefix, dst_dir))
             try_copy(src, rel, prefix=self.prefix, track_file=track_file)
+            try:
+                st = os.stat(dst)
+                ours[rel] = (st.st_size, int(st.st_mtime))
+            except OSError:
+                pass
             installed.append(dll)
 
         # WineD3D is an explicit request to use Wine's OpenGL Direct3D path,
-        # so don't place DXVK DLLs where they would override it.
+        # so don't place DXVK DLLs where they would override it — and put the
+        # Wine builtins back over any DXVK copies Neutron itself installed
+        # earlier (user-installed natives are left alone, as everywhere).
+        dxvk_dlls = ("d3d8.dll", "d3d9.dll", "d3d10core.dll",
+                     "d3d11.dll", "dxgi.dll")
         if "wined3d" not in session.compat_config:
-            dxvk_dlls = ("d3d8.dll", "d3d9.dll", "d3d10core.dll",
-                         "d3d11.dll", "dxgi.dll")
-            for arch, dst in (("x64", "drive_c/windows/system32"),
-                              ("x32", "drive_c/windows/syswow64")):
-                src_dir = os.path.join(n.dxvk_dir, arch)
+            for archs, dst in ((("x64", "x86_64-windows"), "drive_c/windows/system32"),
+                               (("x32", "i386-windows"), "drive_c/windows/syswow64")):
+                src_dir = None
+                for arch in archs:
+                    candidate = os.path.join(n.dxvk_dir, arch)
+                    if os.path.isdir(candidate):
+                        src_dir = candidate
+                        break
+                if not src_dir:
+                    continue
                 for dll in dxvk_dlls:
                     src = os.path.join(src_dir, dll)
                     if os.path.isfile(src):
                         install(src, dst, dll)
+        else:
+            for dst_dir in ("drive_c/windows/system32",
+                            "drive_c/windows/syswow64"):
+                for dll in dxvk_dlls:
+                    rel = dst_dir + "/" + dll
+                    dst = os.path.join(self.prefix, rel)
+                    builtin = os.path.join(n.default_pfx_dir, rel)
+                    if self._is_our_translation_dll(rel, ours) and \
+                            file_exists(builtin, follow_symlinks=True):
+                        log(f"restoring Wine builtin {rel} (wined3d)")
+                        os.remove(dst)
+                        self._pfx_copy(builtin, dst)
+                        ours.pop(rel, None)
 
         # VKD3D-Proton owns the D3D12 pair independently of DXVK/WineD3D.
         for arch, dst in (("x86_64-windows", "drive_c/windows/system32"),
@@ -688,6 +863,12 @@ class CompatData:
                 if os.path.isfile(src):
                     install(src, dst, dll)
 
+        try:
+            with open(self.translation_files_file, "w") as f:
+                for rel, (size, mtime) in sorted(ours.items()):
+                    f.write(f"{rel}\t{size}\t{mtime}\n")
+        except OSError:
+            pass
         if installed:
             log("installed bundled DXVK/VKD3D-Proton runtime DLLs")
 
@@ -727,12 +908,11 @@ class CompatData:
             n.default_pfx_dir,
             mtime_str(n.default_pfx_dir, "system.reg"),
             dir_sig(n.pe_system32), dir_sig(n.pe_syswow64),
-            dir_sig(os.path.join(n.dxvk_dir, "x64")),
-            dir_sig(os.path.join(n.dxvk_dir, "x32")),
+            dir_sig(os.path.join(n.dxvk_dir, "x64")) or dir_sig(os.path.join(n.dxvk_dir, "x86_64-windows")),
+            dir_sig(os.path.join(n.dxvk_dir, "x32")) or dir_sig(os.path.join(n.dxvk_dir, "i386-windows")),
             dir_sig(os.path.join(n.vkd3d_dir, "x86_64-windows")),
             dir_sig(os.path.join(n.vkd3d_dir, "i386-windows")),
-            mtime_str(self.steam_root, "legacycompat", "steamclient.dll"),
-            mtime_str(self.steam_root, "legacycompat", "steamclient64.dll"),
+            # steamclient mtime tracking removed (DLLs no longer copied)
             session.builtin_dll_copy,
             str("wined3d" in cc),
             str(session.use_nvapi),
@@ -858,12 +1038,22 @@ class CompatData:
         # installed and re-clone; keep the prefix's machine identity. Only
         # comparable within one tag — cross-scheme moves are plain upgrades.
         if old[0] == new[0] and (new[1], new[2]) < (old[1], old[2]):
-            log("Removing newer prefix")
-            self.old_machine_guid = get_replace_machine_guid(
-                os.path.join(self.prefix, "system.reg"))
-            self.remove_tracked_files()
-            if file_exists(self.creation_sync_guard, follow_symlinks=False):
-                os.remove(self.creation_sync_guard)
+            # Proton wipes tracked files (registry included) here. That also
+            # destroys per-prefix state (launcher logins, winetricks), so
+            # Neutron only does it on request; the default is a plain
+            # re-overlay, which the version mismatch triggers anyway.
+            if os.environ.get("NEUTRON_DOWNGRADE_REBUILD") == "1":
+                log("Removing newer prefix")
+                self.old_machine_guid = get_replace_machine_guid(
+                    os.path.join(self.prefix, "system.reg"))
+                self.remove_tracked_files()
+                if file_exists(self.creation_sync_guard,
+                               follow_symlinks=False):
+                    os.remove(self.creation_sync_guard)
+            else:
+                log("prefix was created by a newer Neutron; keeping it and "
+                    "re-overlaying (NEUTRON_DOWNGRADE_REBUILD=1 or "
+                    "`destroyprefix` forces a clean rebuild)")
 
     # — steam / VR / NVIDIA extras appended to the manifest —
     def _overlay_extras(self, session, track_file):
@@ -1184,7 +1374,8 @@ class CompatData:
             except OSError:
                 pass
         for f in (self.tracked_files_file, self.version_file,
-                  self.config_info_file, self.creation_sync_guard):
+                  self.config_info_file, self.creation_sync_guard,
+                  self.translation_files_file):
             try:
                 os.remove(f)
             except OSError:
@@ -1259,7 +1450,9 @@ class Session:
         elif ntsync_mode == "1":
             use_ntsync = build_ntsync
         else:
-            use_ntsync = build_ntsync and os.path.exists("/dev/ntsync")
+            # build profile decides whether ntsync is even on the table
+            use_ntsync = (profile()["ntsync"] and build_ntsync
+                          and os.path.exists("/dev/ntsync"))
 
         if use_ntsync:
             self.env.setdefault("WINENTSYNC", "1")
@@ -1397,42 +1590,9 @@ class Session:
                 env.setdefault("XR_RUNTIME_JSON", runtime)
                 break
 
-        # Anti-cheat runtimes (BattlEye / EasyAntiCheat). Proton-patched Wine
-        # reads PROTON_BATTLEYE_RUNTIME / PROTON_EAC_RUNTIME in ntdll's
-        # set_dll_path() and appends v1/lib{,64}/wine (BE) or v2/lib{32,64}
-        # (EAC) itself — so exporting the variable is the load-bearing part.
-        # The WINEDLLPATH additions below are a fallback for unpatched Wine.
         ac_wine_paths = []
-        for ac_name, neutron_var, proton_var, steam_dir, subdirs in (
-            ("BattlEye",       "NEUTRON_BATTLEYE_RUNTIME",
-             "PROTON_BATTLEYE_RUNTIME", "Proton BattlEye Runtime",
-             ("v1/lib64/wine", "v1/lib/wine")),
-            ("EasyAntiCheat",  "NEUTRON_EAC_RUNTIME",
-             "PROTON_EAC_RUNTIME",      "Proton EasyAntiCheat Runtime",
-             ("v2/lib64", "v2/lib32")),
-        ):
-            ac_root = (os.environ.get(neutron_var)
-                       or os.environ.get(proton_var)
-                       or "")
-            if not ac_root and cd.steam_root:
-                candidate = os.path.join(cd.steam_root, "steamapps",
-                                         "common", steam_dir)
-                if os.path.isdir(candidate):
-                    ac_root = candidate
-            if ac_root and os.path.isdir(ac_root):
-                env.setdefault(proton_var, ac_root)
-                env.setdefault(neutron_var, ac_root)
-                for sub in subdirs:
-                    p = os.path.join(ac_root, sub)
-                    if os.path.isdir(p):
-                        ac_wine_paths.append(p)
-                log(f"{ac_name} runtime: {ac_root}")
 
-        # LD_LIBRARY_PATH — do NOT include ac_wine_paths here; those dirs
-        # contain only anti-cheat .so files, not Wine core libs.  Adding them
-        # causes Wine's loader to look for ntdll.so inside the EAC/BE dirs
-        # and fail.  Wine already reads PROTON_EAC_RUNTIME / PROTON_BATTLEYE_RUNTIME
-        # internally for anti-cheat library discovery.
+        # LD_LIBRARY_PATH
         ld_parts = [n.lib_dir] + overlay_paths
         existing_ld = env.get("LD_LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = ":".join(
@@ -1457,6 +1617,20 @@ class Session:
 
         # Sync primitives
         self._detect_sync()
+
+        # Build-profile defaults (per-build curation)
+        for key, value in profile()["env_defaults"].items():
+            if key == "WINE_GST_REGISTRY_DIR":
+                value = os.path.join(cd.compat_data, "gstreamer-1.0") + "/"
+            env.setdefault(key, value)
+        if profile()["proton_env"]:
+            # proton-wine's winegstreamer expects the bundle's own plugins
+            gst_dirs = [d for d in (os.path.join(n.lib_dir, "gstreamer-1.0"),
+                                    os.path.join(n.files_dir, "lib64",
+                                                 "gstreamer-1.0"))
+                        if os.path.isdir(d)]
+            if gst_dirs:
+                env.setdefault("GST_PLUGIN_SYSTEM_PATH_1_0", ":".join(gst_dirs))
 
         # General defaults
         if "forcelgadd" in self.compat_config:
@@ -1556,9 +1730,24 @@ class Session:
         if cd.compat_data:
             overrides["lsteamclient"] = "n,b"
 
-        for dll in ("d3d11", "d3d10core", "d3d9", "dxgi", "d3d8",
-                    "d3d12", "d3d12core"):
-            overrides[dll] = "n,b"
+        # Translation-layer overrides: only for DLLs we actually ship, in the
+        # profile's style ("n" = native-only like Proton, no silent fallback).
+        n = self.neutron
+        style = profile()["d3d_override"]
+        if "wined3d" not in self.compat_config:
+            for dll in ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi"):
+                if (os.path.isfile(os.path.join(n.dxvk_dir, "x64", dll + ".dll"))
+                    or os.path.isfile(os.path.join(n.dxvk_dir, "x86_64-windows", dll + ".dll"))):
+                    overrides[dll] = style
+        for dll in ("d3d12", "d3d12core"):
+            if os.path.isfile(os.path.join(n.vkd3d_dir, "x86_64-windows",
+                                           dll + ".dll")):
+                overrides[dll] = style
+
+        # Disable VR client DLLs — Proton's copies crash without Steam VR
+        if os.environ.get("NEUTRON_ATOM_PROTON"):
+            overrides["vrclient"] = ""
+            overrides["vrclient_x64"] = ""
 
         combined = ";".join(f"{k}={v}" for k, v in overrides.items())
         if combined:
@@ -1579,6 +1768,86 @@ class Session:
         except Exception:
             log("warning: Vulkan validation failed")
 
+    # — base-Proton runtime libs (lsteamclient & co.) for prefixes created
+    #   with `createprefix --proton`; opt-in via NEUTRON_INJECT_BASE_PROTON=1 —
+    def _inject_base_proton(self):
+        unix_paths, dll_paths, base_proton_dir = \
+            self.compatdata.proton_lib_paths()
+        if not base_proton_dir or \
+                os.environ.get("NEUTRON_INJECT_BASE_PROTON") != "1":
+            return
+        # Never into LD_LIBRARY_PATH (clashes with our own unix libs and
+        # breaks Vulkan); WINEDLLPATH is where Wine resolves builtins.
+        all_paths = unix_paths + dll_paths
+        if all_paths:
+            prepend_to_env(self.env, "WINEDLLPATH", ":".join(all_paths), ":")
+        log(f"injecting base Proton lib paths from {base_proton_dir}")
+
+    # — Atom mode: run Proton prefix setup every launch, then launch
+    #   with Neutron's Wine.  Mimics Steam's require_tool_appid. —
+    def _atom_proton_setup(self):
+        atom_proton = os.environ.get("NEUTRON_ATOM_PROTON", "")
+        if not atom_proton:
+            return
+        base_proton_dir = os.path.realpath(atom_proton)
+        base_proton_script = os.path.join(base_proton_dir, "proton")
+        if not os.path.isfile(base_proton_script):
+            log(f"warning: NEUTRON_ATOM_PROTON set but no proton script at "
+                f"{base_proton_script}")
+            return
+
+        log(f"Atom mode — running base Proton prefix setup "
+            f"({os.path.basename(base_proton_dir)})...")
+
+        atom_env = os.environ.copy()
+        for pvar in ("PYTHONHOME", "PYTHONPATH", "PYTHONDONTWRITEBYTECODE"):
+            atom_env.pop(pvar, None)
+        atom_env["STEAM_COMPAT_DATA_PATH"] = self.compatdata.compat_data
+        atom_env["WINEPREFIX"] = self.compatdata.prefix
+        atom_env.setdefault("WINEDEBUG", "-all")
+        atom_env.setdefault("STEAM_COMPAT_CLIENT_INSTALL_PATH",
+                            os.path.expanduser("~/.steam/steam"))
+        for key in ("SteamAppId", "SteamGameId", "STEAM_COMPAT_APP_ID",
+                     "STEAM_COMPAT_INSTALL_PATH", "STEAM_COMPAT_TOOL_PATHS",
+                     "STEAM_COMPAT_MOUNTS"):
+            if key in os.environ:
+                atom_env[key] = os.environ[key]
+
+        # Use runinprefix + wineboot -u: this runs Proton's wine to
+        # create/update the prefix structure WITHOUT Proton's DLL overlay.
+        # Neutron's own setup_prefix() then installs compatible DLLs.
+        # (waitforexitandrun would install Proton's Wine 11 DLLs which
+        # are incompatible with Neutron's Wine 10.x binary.)
+        result = subprocess.run(
+            [base_proton_script, "runinprefix", "wineboot", "-u"],
+            env=atom_env, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, timeout=120)
+        if result.returncode != 0:
+            stderr_text = result.stderr.decode("utf-8", errors="replace")
+            log(f"Atom: base Proton returned {result.returncode}")
+            if stderr_text.strip():
+                debug("Atom Proton stderr", text=stderr_text[:500])
+
+        base_wineserver = os.path.join(base_proton_dir, "files", "bin",
+                                       "wineserver")
+        if os.path.isfile(base_wineserver):
+            try:
+                subprocess.run([base_wineserver, "-k"], env=atom_env,
+                               timeout=15, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+
+        marker = os.path.join(self.compatdata.prefix,
+                              self.compatdata.PROTON_MARKER)
+        try:
+            with open(marker, "w") as f:
+                f.write(base_proton_dir)
+        except OSError:
+            pass
+
+        log("Atom: base Proton setup complete, launching with Neutron")
+
     # — run / waitforexitandrun —
     def run(self, args, wait=True):
         n = self.neutron
@@ -1587,6 +1856,8 @@ class Session:
 
         debug("Session.run() entered", args=list(args), wait=wait)
 
+        self._atom_proton_setup()
+
         debug("Preparing prefix")
         cd.setup_prefix(self)
         debug("Prefix ready")
@@ -1594,6 +1865,8 @@ class Session:
         debug("Checking Vulkan")
         self.check_vulkan()
         debug("Vulkan check complete")
+
+        self._inject_base_proton()
 
         # honour cmdlineappend from compat_config
         args = list(args) + self.cmdlineappend
@@ -1714,6 +1987,7 @@ class Session:
     # — runinprefix —
     def run_in_prefix(self, args):
         self.compatdata.setup_prefix(self)
+        self._inject_base_proton()
         proc = subprocess.run([self.neutron.runner()] + list(args), env=self.env)
         sys.exit(proc.returncode)
 
@@ -1767,6 +2041,23 @@ class Session:
         kv("runner", n.runner())
         kv("prefix schema",
            f"{CURRENT_PREFIX_VERSION} (from {PREFIX_VERSION_SOURCE})")
+        kv("build profile",
+           f"{ACTIVE_PROFILE} — {profile()['description']}")
+        # Proton-only components decide whether Steam titles can bridge at all
+        comps = []
+        for name, path in (
+                ("lsteamclient.dll", os.path.join(n.pe_system32, "lsteamclient.dll")),
+                ("lsteamclient.so", os.path.join(n.lib_dir, "wine", "x86_64-unix",
+                                                 "lsteamclient.so")),
+                ("steam.exe", os.path.join(n.pe_system32, "steam.exe")),
+                ("vrclient_x64.dll", os.path.join(n.pe_system32, "vrclient_x64.dll")),
+                ("wineopenxr.dll", os.path.join(n.pe_system32, "wineopenxr.dll"))):
+            comps.append(f"{name}:{'yes' if os.path.exists(path) else 'NO'}")
+        kv("proton components", "  ".join(comps))
+        if not os.path.exists(os.path.join(n.pe_system32, "lsteamclient.dll")):
+            kv("", "no lsteamclient in this build — Steam titles need a "
+                   "base-Proton prefix (createprefix --proton) + "
+                   "NEUTRON_INJECT_BASE_PROTON=1")
         if n.missing_default_prefix():
             template_state = "missing (created on first launch)"
         elif n.default_prefix_stale():
@@ -1774,6 +2065,29 @@ class Session:
         else:
             template_state = "ready"
         kv("default_pfx", f"[{template_state}] {n.default_pfx_dir}")
+
+        section("translation layers (bundled)")
+        found = False
+        for label, base, dirs in (
+                ("DXVK", n.dxvk_dir, (("x64", "x64"), ("x32", "x86"))),
+                ("VKD3D-Proton", n.vkd3d_dir,
+                 (("x86_64-windows", "x64"), ("i386-windows", "x86")))):
+            for sub, expect in dirs:
+                d = os.path.join(base, sub)
+                if not os.path.isdir(d):
+                    continue
+                found = True
+                for dll in sorted(os.listdir(d)):
+                    if not dll.lower().endswith(".dll"):
+                        continue
+                    problem = check_translation_dll(os.path.join(d, dll), expect)
+                    kv(f"{label} {sub}/{dll}", "ok" if problem is None
+                       else f"BAD — {problem}")
+        if not found:
+            kv("(none)", "no bundled DXVK/VKD3D-Proton dirs under files/lib/wine")
+        kv("overrides style", profile()["d3d_override"]
+           + (" (wined3d: DXVK overrides off)"
+              if "wined3d" in self.compat_config else ""))
 
         section("sync backend")
         build_ntsync = self._binary_has(n.wineserver, "ntsync")
@@ -1867,6 +2181,7 @@ def main():
     tool_dir = os.path.dirname(os.path.realpath(__file__))
     neutron = Neutron(tool_dir)
     load_prefix_version(neutron.version_file)
+    select_build_profile(CURRENT_PREFIX_VERSION)
 
     if not neutron.has_wine():
         die(f"Wine binary not found: {neutron.wine}")

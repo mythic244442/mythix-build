@@ -1557,19 +1557,53 @@ install_wine() {
     section "Installing Wine"
     mkdir -p "$install_prefix"
 
+    local build_unified="${build_run_dir}/wine-unified"
     local build64="${build_run_dir}/wine64"
-    local build32="${build_run_dir}/wine32"
 
-    if [ -d "$build64" ]; then
-        msg2 "make install  (64-bit)"
+    if [ -d "$build_unified" ]; then
+        msg2 "make install  (unified wow64 tree)"
+        _install_logged -C "$build_unified"
+        ok "Unified wow64 Wine installed"
+        local build_i386_unix="${build_run_dir}/wine-i386-unix"
+        if [ -d "$build_i386_unix" ] && [ -f "$build_i386_unix/Makefile" ]; then
+            msg2 "Installing i386-unix drivers (unix .so files only)"
+            local i386_unix_dest="${install_prefix}/lib/wine/i386-unix"
+            mkdir -p "$i386_unix_dest"
+            # Install the wine/wine-preloader 32-bit loaders
+            for f in "$build_i386_unix"/loader/wine "$build_i386_unix"/loader/wine-preloader; do
+                [ -f "$f" ] && install -m 755 "$f" "$i386_unix_dest/" && \
+                    msg2 "  $(basename "$f")"
+            done
+            # Install the 64-bit compat loader as wine64 in i386-unix (Proton convention)
+            if [ -f "${install_prefix}/lib/wine/x86_64-unix/wine64" ]; then
+                install -m 755 "${install_prefix}/lib/wine/x86_64-unix/wine64" "$i386_unix_dest/"
+                msg2 "  wine64 (from x86_64-unix)"
+            fi
+            if [ -f "${install_prefix}/lib/wine/x86_64-unix/wine64-preloader" ]; then
+                install -m 755 "${install_prefix}/lib/wine/x86_64-unix/wine64-preloader" "$i386_unix_dest/"
+                msg2 "  wine64-preloader (from x86_64-unix)"
+            fi
+            # Install all .so unix drivers
+            local _so_count=0
+            for f in "$build_i386_unix"/dlls/*/*.so; do
+                [ -f "$f" ] || continue
+                install -m 644 "$f" "$i386_unix_dest/"
+                _so_count=$(( _so_count + 1 ))
+            done
+            ok "i386-unix: ${_so_count} .so drivers + loaders installed"
+        fi
+    elif [ -d "$build64" ]; then
+        msg2 "make install  (64-bit tree — legacy two-tree mode)"
         _install_logged -C "$build64"
         ok "64-bit Wine installed"
-    fi
-
-    if [ "${SKIP_32BIT}" != "true" ] && [ -d "$build32" ]; then
-        msg2 "make install  (32-bit)"
-        _install_logged -C "$build32"
-        ok "32-bit Wine installed"
+        local build32="${build_run_dir}/wine32"
+        if [ "${SKIP_32BIT}" != "true" ] && [ -d "$build32" ]; then
+            msg2 "make install  (32-bit)"
+            _install_logged -C "$build32"
+            ok "32-bit Wine installed"
+        fi
+    else
+        err "No build tree found in ${build_run_dir}"
     fi
 
     ok "Wine installed to: $install_prefix"
@@ -3638,8 +3672,9 @@ open('$_shell32_res/$_bmp','wb').write(bmp)
             # Ensure user ownership so container root-owned leftovers don't block future runs
             chown -R "$(id -u):$(id -g)" "$_vkd3d_src" 2>/dev/null || true
             # Clear stale vkd3d build artifacts from previous runs
-            _vkd3d_build="${BUILD_RUN_DIR}/${BUILD_NAME}/wine64/libs/vkd3d"
-            [ -d "$_vkd3d_build" ] && { sudo rm -rf "$_vkd3d_build" 2>/dev/null || rm -rf "$_vkd3d_build"; }
+            for _vkd3d_build in "${BUILD_RUN_DIR}/wine-unified/libs/vkd3d" "${BUILD_RUN_DIR}/${BUILD_NAME}/wine64/libs/vkd3d"; do
+                [ -d "$_vkd3d_build" ] && { sudo rm -rf "$_vkd3d_build" 2>/dev/null || rm -rf "$_vkd3d_build"; }
+            done
             ok "Fixup: replaced libs/vkd3d with TkG-compatible version"
             (( _fixups_applied++ )) || true
         fi
@@ -4658,7 +4693,7 @@ else
     pregen_headers "$WINE_SOURCE_DIR"
 
     # ── autoreconf ──────────────────────────────────────────────────────────
-    if [ "$RESUME" = "true" ] && [ -f "${BUILD_RUN_DIR}/wine64/Makefile" ]; then
+    if [ "$RESUME" = "true" ] && { [ -f "${BUILD_RUN_DIR}/wine-unified/Makefile" ] || [ -f "${BUILD_RUN_DIR}/wine64/Makefile" ]; }; then
         msg2 "--resume: skipping autoreconf"
     else
         run_autoreconf "$WINE_SOURCE_DIR"
