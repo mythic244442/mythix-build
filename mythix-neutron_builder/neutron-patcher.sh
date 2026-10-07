@@ -62,6 +62,8 @@ REQUESTED_GROUPS=("$@")
 WINE_SOURCE_KEY="${WINE_SOURCE_KEY:-}"
 PATCH_LOG="${PATCH_LOG:-/dev/null}"
 DRY_RUN="${DRY_RUN:-0}"
+STRICT="${NEUTRON_PATCH_STRICT:-0}"        # 1 = exit 2 when any patch fails
+MANIFEST="${NEUTRON_PATCH_MANIFEST:-}"     # file: one line per patch (group, name, sha256, result)
 
 # ── Discover available patch groups ───────────────────────────────────────────
 # A group is any subdirectory of PATCHES_DIR that contains at least one .patch file
@@ -89,6 +91,7 @@ _discover_groups() {
 
         # Read group.conf if present
         local desc="$gname" prio=50 sources="" conflicts="" requires=""
+        local description="" priority=""   # reset per group (eval'd from group.conf)
         conf_file="${gdir}/group.conf"
         if [ -f "$conf_file" ]; then
             # Source it in a subshell to avoid polluting our namespace
@@ -170,6 +173,9 @@ if [ ${#REQUESTED_GROUPS[@]} -gt 0 ]; then
                 fi
             done
             if [ "$local_found" = "false" ]; then
+                if [ "$STRICT" = "1" ]; then
+                    err "Requested patch group not available for source '${WINE_SOURCE_KEY}': ${rg}"
+                fi
                 warn "Unknown patch group: ${rg} — skipping"
             fi
         done
@@ -209,7 +215,7 @@ elif [ -t 0 ]; then
         printf "\n  ${_B}Select patch groups to apply:${_R}\n"
         printf "    0) [none]  — skip patching\n"
         printf "    a) [all]   — apply everything\n"
-        local _idx=1
+        _idx=1
         for g in "${AVAILABLE_GROUPS[@]}"; do
             printf "    %d) %-25s %s\n" "$_idx" "$g" "${GROUP_DESC[$g]}"
             (( _idx++ )) || true
@@ -296,13 +302,21 @@ for g in "${SELECTED_GROUPS[@]}"; do
 done
 
 # ── Create a git checkpoint for easy revert ───────────────────────────────────
+# Uncommitted changes in the tree are part of what gets built (e.g. the
+# mythix-wine fixups), so they are committed into the checkpoint — never
+# stashed away, which would silently drop them from the build.
 _git_available=false
 if [ -d "${WINE_SRC}/.git" ]; then
     _git_available=true
-    # Stash any uncommitted changes, then create a checkpoint tag
     _checkpoint="neutron-pre-patch-$(date +%s)"
-    (cd "$WINE_SRC" && git stash --include-untracked -q 2>/dev/null || true)
-    (cd "$WINE_SRC" && git tag -f "$_checkpoint" HEAD 2>/dev/null || true)
+    if [ "$DRY_RUN" != "1" ] && [ -n "$(cd "$WINE_SRC" && git status --porcelain 2>/dev/null)" ]; then
+        (cd "$WINE_SRC" && git add -A && \
+         git -c user.name="neutron-patcher" -c user.email="neutron@mythix.invalid" \
+             commit -q -m "neutron: pre-patch checkpoint (uncommitted tree state)" \
+             2>/dev/null) || true
+        msg2 "Committed uncommitted tree state into the checkpoint"
+    fi
+    (cd "$WINE_SRC" && git tag -f "$_checkpoint" HEAD >/dev/null 2>&1 || true)
     msg2 "Git checkpoint: ${_checkpoint}"
 fi
 
@@ -380,9 +394,11 @@ _apply_group() {
             fi
         fi
 
+        local result=""
         if [ "$apply_ok" = "true" ]; then
             printf "  ${_GRN}✓${_R}  %s\n" "$pname"
             (( applied++ )) || true
+            result="applied"
         else
             # Check if already applied (reverse applies cleanly)
             local already_applied=false
@@ -392,12 +408,18 @@ _apply_group() {
             if [ "$already_applied" = "true" ]; then
                 printf "  ${_DIM}≡${_R}  %s ${_DIM}(already applied)${_R}\n" "$pname"
                 (( skipped++ )) || true
+                result="already-applied"
             else
                 printf "  ${_RED}✗${_R}  %s ${_RED}(FAILED)${_R}\n" "$pname"
                 warn "Failed to apply: ${pf}"
                 warn "Check ${PATCH_LOG} for details"
                 (( failed++ )) || true
+                result="FAILED"
             fi
+        fi
+        if [ -n "$MANIFEST" ]; then
+            printf '%s=%s sha256=%s result=%s\n' "$group" "$pname" \
+                "$(sha256sum "$pf" | cut -d' ' -f1)" "$result" >> "$MANIFEST"
         fi
     done
 
@@ -424,9 +446,13 @@ fi
 # Commit the patched state if git is available
 if [ "$_git_available" = "true" ] && [ "$_total_applied" -gt 0 ] && [ "$DRY_RUN" != "1" ]; then
     (cd "$WINE_SRC" && git add -A && \
-     git commit -q -m "neutron: apply ${#SELECTED_GROUPS[@]} patch group(s): ${SELECTED_GROUPS[*]}" \
+     git -c user.name="neutron-patcher" -c user.email="neutron@mythix.invalid" \
+         commit -q -m "neutron: apply ${#SELECTED_GROUPS[@]} patch group(s): ${SELECTED_GROUPS[*]}" \
      2>/dev/null) || true
     msg2 "Patched state committed to git"
 fi
 
+if [ "$STRICT" = "1" ] && [ "$_total_failed" -gt 0 ]; then
+    exit 2
+fi
 exit 0

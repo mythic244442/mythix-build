@@ -87,6 +87,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── ccache (dramatically speeds up rebuilds) ────────────────────────────
     ccache \
 
+    # ── nasm (FFmpeg SIMD asm — static FFmpeg for winedmo, GE-based profiles) ─
+    nasm \
+
     # ── Rust (used by some Proton components) ───────────────────────────────
     rustc \
     cargo \
@@ -150,6 +153,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libudev-dev \
     libusb-1.0-0-dev \
 
+    # OpenXR loader (wineopenxr in GE-based profiles; VR games)
+    libopenxr-dev \
+
+    # Compression libs for the static FFmpeg build (matroska, tiff, …)
+    liblzma-dev \
+    libbz2-dev \
+    zlib1g-dev \
+
     # OpenCL
     ocl-icd-opencl-dev \
     opencl-headers \
@@ -199,6 +210,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ocl-icd-opencl-dev:i386 \
     libglib2.0-dev:i386 \
     libssl-dev:i386 \
+    zlib1g-dev:i386 \
 
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

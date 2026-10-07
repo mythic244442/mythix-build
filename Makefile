@@ -70,6 +70,8 @@ NEUTRON_LIBS := \
     neutron-vkd3d-build.sh \
     neutron-package.sh \
     neutron-patcher.sh \
+    mythix-ge-pipeline.sh \
+    mythix-ffmpeg-build.sh \
     neutron.py \
     dxvk.conf \
     vkd3d-proton.conf \
@@ -183,6 +185,12 @@ install-neutron: _dirs
 	    cp -a "$(NEUTRON)/patches" "$(DESTDIR)$(NEUTRON_LIBDIR)/patches"; \
 	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(NEUTRON_LIBDIR)/patches/ (%s groups)\n" \
 	        "$$(find "$(DESTDIR)$(NEUTRON_LIBDIR)/patches" -mindepth 1 -maxdepth 1 -type d | wc -l)"; \
+	fi
+	@if [ -d "$(NEUTRON)/profiles" ]; then \
+	    rm -rf "$(DESTDIR)$(NEUTRON_LIBDIR)/profiles"; \
+	    cp -a "$(NEUTRON)/profiles" "$(DESTDIR)$(NEUTRON_LIBDIR)/profiles"; \
+	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(NEUTRON_LIBDIR)/profiles/ (%s profiles)\n" \
+	        "$$(find "$(DESTDIR)$(NEUTRON_LIBDIR)/profiles" -mindepth 1 -maxdepth 1 -type d | wc -l)"; \
 	fi
 	@src="$(NEUTRON)/$(NEUTRON_CFG)"; dest="$(DESTDIR)$(CFGDIR)/$(NEUTRON_CFG)"; \
 	[ -f "$$src" ] || exit 0; \
@@ -397,7 +405,9 @@ help:
 	@printf "  $(PREFIX)/lib/mythix-neutron_builder/\n"
 	@printf "      *.sh  ntsync.h  deps-neutron-tkg\n"
 	@printf "  $(PREFIX)/lib/mythix-neutron_builder/patches/\n"
-	@printf "      ← drop .patch/.diff here to apply before proton-wine configure\n"
+	@printf "      ← patch groups (one dir per group, see neutron-patcher.sh)\n"
+	@printf "  $(PREFIX)/lib/mythix-neutron_builder/profiles/\n"
+	@printf "      ← pinned Mythix Wine recipes (neutron-builder --list-profiles)\n"
 	@printf "  $(PREFIX)/lib/mythix-wine-proton_hybrid_builder/buildz/\n"
 	@printf "      ← hybrid builds install here when using 'local' mode\n"
 	@printf "  $(PREFIX)/lib/mythix-wine_builder/\n"

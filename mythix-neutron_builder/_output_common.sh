@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# _output_common.sh — Common output helpers for looni-build shell scripts.
+# _output_common.sh — Common output helpers for mythix-build shell scripts.
 #
 # Source this AFTER setting your color variables. Expects these variables
 # to be set by the caller:

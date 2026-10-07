@@ -140,6 +140,23 @@ def load_prefix_version(version_file):
             f"using fallback prefix schema {CURRENT_PREFIX_VERSION}")
 
 
+def load_build_info(path):
+    """KEY=VALUE facts the builder writes next to the version file
+    (BUILD_MODE, PROFILE, WAYLAND, ...). Missing file -> {}."""
+    info = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                info[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return info
+
+
 # ── Build profiles — per-Wine-build curation, like Valve's per-version proton ─
 # Selected from the version tag (case-insensitive prefix match); NEUTRON_PROFILE
 # overrides. Keep facts about a build here rather than scattering if/elses.
@@ -152,6 +169,20 @@ BUILD_PROFILES = {
         ntsync=False,               # build targets e/fsync; never opt into ntsync
         d3d_override="n",           # DXVK/VKD3D native-only, exactly like Proton
         proton_env=True,            # proton-wine reads PROTON_* + WINE_* knobs
+        env_defaults={
+            "WINE_LARGE_ADDRESS_AWARE": "1",
+            "WINE_GST_REGISTRY_DIR": "",   # filled per-prefix in init_session
+        },
+    ),
+    # Mythix Neutron 11.x: Valve bleeding-edge + GE (incl. GE's Wayland work)
+    # + TkG + Mythix patches, classic multilib. Valve's tree carries ntsync
+    # alongside esync/fsync; the launcher still checks the build + kernel.
+    "mythix-neutron-11": dict(
+        description="Mythix Neutron 11.x (Valve bleeding-edge + GE + TkG)",
+        wine_tree="proton",
+        ntsync=True,
+        d3d_override="n",
+        proton_env=True,
         env_defaults={
             "WINE_LARGE_ADDRESS_AWARE": "1",
             "WINE_GST_REGISTRY_DIR": "",   # filled per-prefix in init_session
@@ -503,6 +534,8 @@ class Neutron:
         self.default_pfx_dir = os.path.join(self.share_dir, "default_pfx")
 
         self.version_file = os.path.join(neutron_dir, "version")
+        # Facts from the builder (build mode, profile, Wayland default, ...)
+        self.build_info = load_build_info(os.path.join(neutron_dir, "build-info"))
         self.dxvk_conf = os.path.join(self.files_dir, "dxvk.conf")
         self.wine_inf = os.path.join(self.share_dir, "wine", "wine.inf")
 
@@ -1425,6 +1458,71 @@ class Session:
         self.use_nvapi = "disablenvapi" not in self.compat_config
         self.use_wow64 = (os.environ.get("NEUTRON_USE_WOW64", "0") == "1")
         self.nvidia_wine_dll_dir = find_nvidia_wine_dll_dir()
+        self.use_wayland, self.wayland_reason = self._decide_wayland()
+
+    # — native Wayland driver (winewayland) selection —
+    def _decide_wayland(self):
+        """-> (use_wayland, reason). Opt-in per build (build-info WAYLAND=1),
+        per launch (NEUTRON_WAYLAND=1, compat_config `wayland`, or GE's
+        PROTON_ENABLE_WAYLAND / PROTON_USE_WAYLAND); NEUTRON_WAYLAND=0 or
+        `nowayland` forces X11. Needs a Wayland session (WAYLAND_DISPLAY)."""
+        env = self.env
+        knob = env.get("NEUTRON_WAYLAND", "")
+        if knob == "0" or "nowayland" in self.compat_config:
+            return False, "forced off (NEUTRON_WAYLAND=0 / nowayland) — X11 driver"
+        if knob == "1":
+            why = "NEUTRON_WAYLAND=1"
+        elif "wayland" in self.compat_config:
+            why = "compat_config wayland"
+        elif (nonzero(env.get("PROTON_ENABLE_WAYLAND", ""))
+              or nonzero(env.get("PROTON_USE_WAYLAND", ""))):
+            why = "PROTON_ENABLE_WAYLAND"
+        elif self.neutron.build_info.get("WAYLAND") == "1":
+            why = "build default (Wayland-first build)"
+        else:
+            return False, "off for this build (NEUTRON_WAYLAND=1 enables)"
+        if not env.get("WAYLAND_DISPLAY"):
+            return False, f"wanted ({why}) but no Wayland session (WAYLAND_DISPLAY unset)"
+        return True, why
+
+    @staticmethod
+    def _primary_monitor():
+        """Primary output name as XWayland reports it (GE does the same)."""
+        xrandr = shutil.which("xrandr")
+        if not xrandr:
+            return None
+        try:
+            out = subprocess.run([xrandr], capture_output=True, text=True,
+                                 timeout=3, check=True).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        for line in out.splitlines():
+            m = re.match(r"^(\S+)\s+connected\s+primary\b", line)
+            if m:
+                return m.group(1)
+        return None
+
+    def _apply_wayland_env(self):
+        """Mirror GE-Proton's winewayland launch environment."""
+        env = self.env
+        if not self.use_wayland:
+            if self.wayland_reason.startswith("forced off"):
+                # Wayland-first builds would still pick winewayland on their own
+                env.setdefault("WINE_GRAPHICS_DRIVER", "x11")
+            return
+        env.setdefault("WINE_GRAPHICS_DRIVER", "wayland")
+        env.setdefault("WINE_USE_EGL", "1")                 # OpenGL on winewayland
+        env.setdefault("WINE_DISABLE_FULLSCREEN_HACK", "1") # FSHack is X11-only
+        env.setdefault("WINE_MOVE_HACK", "1")
+        env.setdefault("PROTON_USE_XALIA", "0")             # can't position toplevels
+        monitor = (env.get("NEUTRON_WAYLAND_MONITOR")
+                   or env.get("PROTON_WAYLAND_MONITOR"))
+        if monitor:
+            env["WAYLANDDRV_PRIMARY_MONITOR"] = monitor
+        elif "WAYLANDDRV_PRIMARY_MONITOR" not in env:
+            monitor = self._primary_monitor()
+            if monitor:
+                env["WAYLANDDRV_PRIMARY_MONITOR"] = monitor
 
     # — sync primitive detection —
     @staticmethod
@@ -1640,6 +1738,9 @@ class Session:
         env.setdefault("WINEDEBUG", "-all")
         env.setdefault("DXVK_LOG_LEVEL", "none")
 
+        # Display driver (native Wayland vs X11/XWayland)
+        self._apply_wayland_env()
+
         # DXVK defaults
         if self.use_nvapi:
             env.setdefault("DXVK_ENABLE_NVAPI", "1")
@@ -1743,6 +1844,10 @@ class Session:
             if os.path.isfile(os.path.join(n.vkd3d_dir, "x86_64-windows",
                                            dll + ".dll")):
                 overrides[dll] = style
+
+        # Native Wayland driver: make sure it isn't disabled by a stale override
+        if self.use_wayland:
+            overrides["winewayland.drv"] = "b"
 
         # Disable VR client DLLs — Proton's copies crash without Steam VR
         if os.environ.get("NEUTRON_ATOM_PROTON"):
@@ -2043,6 +2148,17 @@ class Session:
            f"{CURRENT_PREFIX_VERSION} (from {PREFIX_VERSION_SOURCE})")
         kv("build profile",
            f"{ACTIVE_PROFILE} — {profile()['description']}")
+        bi = n.build_info
+        if bi:
+            kv("build-info", "  ".join(f"{k}={bi[k]}" for k in
+                                       ("PROFILE", "BUILD_MODE", "WAYLAND", "SOURCE")
+                                       if bi.get(k)))
+        kv("display driver",
+           ("wayland" if self.use_wayland else
+            env.get("WINE_GRAPHICS_DRIVER", "build default"))
+           + f" — {self.wayland_reason}")
+        if self.use_wayland:
+            kv("wayland monitor", env.get("WAYLANDDRV_PRIMARY_MONITOR", "(compositor default)"))
         # Proton-only components decide whether Steam titles can bridge at all
         comps = []
         for name, path in (
@@ -2165,7 +2281,7 @@ class Session:
             managed_prefixes = ("WINE", "PROTON_", "NEUTRON_", "RADV_",
                                 "__NV", "__GLX", "__VK", "__GLVND", "MANGOHUD",
                                 "VR_", "OPENVR", "XR_", "STEAM",
-                                "NVIDIA_", "ORIG_")
+                                "NVIDIA_", "ORIG_", "WAYLAND")
             managed_exact = {"LD_LIBRARY_PATH", "PATH", "WINEARCH",
                              "SteamAppId", "SteamGameId", "OPENCOMPOSITE_PATH"}
             keys = sorted(k for k in env

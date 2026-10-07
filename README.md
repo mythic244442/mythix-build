@@ -323,6 +323,8 @@ just like GE-Proton, but built locally from the sources you choose with the
 compiler flags you want.
 
 ```bash
+neutron-builder --profile mythix-11.19 --container  # Mythix Wine 11.19 (pinned, Wayland-first)
+neutron-builder --list-profiles                  # pinned Mythix Wine recipes
 neutron-builder                                  # interactive wizard
 neutron-builder --source proton-wine             # Valve proton-wine (branch picker)
 neutron-builder --source proton-wine --branch proton_9.0
@@ -338,6 +340,18 @@ neutron-builder --vkd3d-only                     # rebuild VKD3D-Proton only
 neutron-builder --reinstall-components           # re-package without rebuilding
 neutron-builder --list                           # show installed Neutron builds
 ```
+
+#### Mythix Wine profiles
+
+Mythix Wine flavours are built from **profiles**: pinned recipes in
+`mythix-neutron_builder/profiles/`. Every upstream input is pinned, and every
+build writes a `mythix-source.lock` into the package. Today there are three:
+
+- `mythix-11.19`: GE-based, Wayland-first.
+- `mythix-11.11`: safety net.
+- `mythix-10.17`: frozen esync/fsync build.
+
+See [`profiles/README.md`](mythix-neutron_builder/profiles/README.md).
 
 #### Proton Wine Sources
 
@@ -406,6 +420,10 @@ GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
 
 | Flag | Description |
 |------|-------------|
+| `--profile NAME` | Build a pinned Mythix Wine profile (`profiles/NAME`) |
+| `--list-profiles` | Show available profiles |
+| `--build-mode MODE` | `classic` (wine64 + 32-bit tree) \| `wow64` (unified) |
+| `--allow-patch-failures` | Let profile patch layers fail (re-curation only) |
 | `--source NAME` | Wine source key |
 | `--branch BRANCH` | Pin proton-wine to a specific branch |
 | `--no-pull` | Skip `git pull` |

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║         mythix-neutron_builder  •  Wine compilation engine                  ║
-# ║   Unified wow64 build (--enable-archs) with Proton-specific flags         ║
+# ║   classic multilib or unified wow64 build, Proton-specific flags         ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 #
 # Called by neutron-builder.sh.  Can also be invoked standalone if the
@@ -16,7 +16,14 @@
 #   WINE_BUILD          — build name; defaults to last component of PREFIX
 #   JOBS                — parallel make threads; defaults to nproc
 #   SKIP_32BIT          — "true" to skip the 32-bit build
-#   BUILD_RUN_DIR       — directory for the wine-unified build tree
+#   NEUTRON_BUILD_MODE  — "classic": 64-bit tree (wine64) + 32-bit tree (wine32)
+#                         "wow64"  : unified --enable-archs tree (wine-unified)
+#                                    + i386-unix drivers (wine-i386-unix)
+#                         default: wow64
+#   BUILD_RUN_DIR       — directory for the build trees
+#   NEUTRON_FFMPEG_PREFIX_64 / _32
+#                       — static FFmpeg prefixes (mythix-ffmpeg-build.sh); when
+#                         set, Wine is configured --with-ffmpeg against them
 #   CUSTOM_CFG          — path to neutron-customization.cfg
 #   RESUME              — "true" to skip configure if Makefile already present
 #   BUILD_LOG           — path for build log; defaults to BUILD_RUN_DIR/build.log
@@ -55,14 +62,26 @@ _NCORE_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 : "${NEUTRON_SOURCE_KEY:=proton-wine}"
 : "${BUILD_RUN_DIR:=$(pwd)/build-run/${WINE_BUILD}}"
 : "${BUILD_LOG:=${BUILD_RUN_DIR}/build.log}"
+: "${NEUTRON_BUILD_MODE:=wow64}"
 
 WINE_SOURCE_DIR="${WINE_SOURCE}"
 INSTALL_PREFIX="${PREFIX}"
 BUILD_UNIFIED="${BUILD_RUN_DIR}/wine-unified"
 BUILD_I386_UNIX="${BUILD_RUN_DIR}/wine-i386-unix"
-# Legacy variables kept for install_wine() compatibility
-BUILD64="${BUILD_UNIFIED}"
-BUILD32=""
+case "$NEUTRON_BUILD_MODE" in
+    classic)
+        BUILD64="${BUILD_RUN_DIR}/wine64"
+        BUILD32="${BUILD_RUN_DIR}/wine32"
+        ;;
+    wow64)
+        BUILD64="${BUILD_UNIFIED}"
+        BUILD32=""
+        ;;
+    *)
+        printf 'ERR! NEUTRON_BUILD_MODE must be classic or wow64 (got %s)\n' "$NEUTRON_BUILD_MODE" >&2
+        exit 1
+        ;;
+esac
 
 mkdir -p "${BUILD_RUN_DIR}"
 
@@ -77,6 +96,7 @@ mkdir -p "${BUILD_RUN_DIR}"
     printf '# Started     : %s\n' "$(date)"
     printf '# Source      : %s\n' "$WINE_SOURCE_DIR"
     printf '# Source key  : %s\n' "$NEUTRON_SOURCE_KEY"
+    printf '# Build mode  : %s\n' "$NEUTRON_BUILD_MODE"
     printf '# Install     : %s\n' "$INSTALL_PREFIX"
     printf '# Jobs        : %s\n' "$JOBS"
     printf '# Resume      : %s\n\n' "$RESUME"
@@ -391,6 +411,7 @@ trap '_core_on_error $LINENO' ERR
 # ══════════════════════════════════════════════════════════════════════════════
 sep "Proton Wine Build Core"
 msg2 "Source key  : ${NEUTRON_SOURCE_KEY}"
+msg2 "Build mode  : ${NEUTRON_BUILD_MODE}"
 msg2 "Source dir  : ${WINE_SOURCE_DIR}"
 msg2 "Install dir : ${INSTALL_PREFIX}"
 msg2 "Build root  : ${BUILD_RUN_DIR}"
@@ -601,7 +622,11 @@ elif command -v ccache >/dev/null 2>&1; then
 fi
 
 msg2 "Jobs          : ${JOBS:-$(nproc)}"
-msg2 "Build mode    : unified wow64 (--enable-archs)"
+if [ "$NEUTRON_BUILD_MODE" = "classic" ]; then
+    msg2 "Build mode    : classic multilib (wine64 + wine32 trees)"
+else
+    msg2 "Build mode    : unified wow64 (--enable-archs)"
+fi
 msg2 "32-bit        : $([ "${SKIP_32BIT:-false}" = "true" ] && echo skipped || echo enabled)"
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -617,69 +642,17 @@ _needs_configure() {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  Unified wow64 build  (--enable-archs=i386,x86_64)
+#  Post-configure ntsync fix  (both build modes)
 #
-#  Single configure + single build tree produces both architectures.
-#  The 64-bit wine binary handles 32-bit PE via wow64 thunking — no separate
-#  32-bit wine binary or full set of i386-unix .so files.  This matches how
-#  Valve builds Proton's wine and is required for bleeding-edge sources.
+#  Wine's autoconf test for linux/ntsync.h fails silently in cross-build
+#  container environments even when the header compiles correctly (confirmed
+#  by direct gcc test).  Since the header IS present and valid, force the
+#  define in config.h before compilation begins.
 # ══════════════════════════════════════════════════════════════════════════════
-sep "Unified wow64 configure"
-mkdir -p "$BUILD_UNIFIED"
-
-# 64-bit host compiler
-export CC="$(_wrap_cc gcc)"
-export CXX="$(_wrap_cc g++)"
-# In --enable-archs mode, Wine uses CROSSCC for x86_64 PE modules and
-# i386_CC for i386 PE modules.  Both must be MinGW cross-compilers.
-# i386-unix drivers are built in a separate tree (wine-i386-unix) using
-# i686-linux-gnu-gcc as a cross-compiler — see the i386-unix section below.
-export CROSSCC="$(_wrap_cc "${MINGW_CC_64:-x86_64-w64-mingw32-gcc}")"
-export CROSSCXX="$(_wrap_cc "${MINGW_CXX_64:-x86_64-w64-mingw32-g++}")"
-export i386_CC="$(_wrap_cc "${MINGW_CC_32:-i686-w64-mingw32-gcc}")"
-
-export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
-export PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH}"
-export LDFLAGS="${LDFLAGS:-} -L/usr/lib/x86_64-linux-gnu -L/lib/x86_64-linux-gnu ${_lto_flags}"
-export CFLAGS="${_opt_flags} ${_lto_flags}"
-export CXXFLAGS="${_opt_flags} ${_lto_flags}"
-
-# Verify 32-bit MinGW cross-compiler is available (unless skipping 32-bit)
-if [ "${SKIP_32BIT}" != "true" ]; then
-    command -v "${MINGW_CC_32:-i686-w64-mingw32-gcc}" >/dev/null 2>&1 || \
-        err "32-bit MinGW cross-compiler not found: ${MINGW_CC_32:-i686-w64-mingw32-gcc}
-         Install: sudo apt install gcc-mingw-w64-i686 g++-mingw-w64-i686"
-fi
-
-msg2 "CC           = ${CC}"
-msg2 "CROSSCC      = ${CROSSCC}"
-msg2 "i386_CC      = ${i386_CC}"
-msg2 "PKG_PATH     = ${PKG_CONFIG_PATH}"
-
-cd "$BUILD_UNIFIED"
-if _needs_configure "$BUILD_UNIFIED"; then
-    _configure_archs="x86_64"
-    [ "${SKIP_32BIT}" != "true" ] && _configure_archs="i386,x86_64"
-
-    _run_configure "${WINE_SOURCE_DIR}/configure" \
-        --prefix="${INSTALL_PREFIX}" \
-        --enable-archs="${_configure_archs}" \
-        --build=x86_64-linux-gnu \
-        CPPFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu" \
-        ${OPENCL_LIBS:+OPENCL_LIBS="${OPENCL_LIBS}"} \
-        "${_args_common[@]+"${_args_common[@]}"}" \
-        "${_args_64[@]+"${_args_64[@]}"}"
-fi
-
-sep "Unified compile  (jobs=${JOBS})"
-
-# ── Post-configure ntsync fix ──────────────────────────────────────────────────
-# Wine's autoconf test for linux/ntsync.h fails silently in cross-build
-# container environments even when the header compiles correctly (confirmed
-# by direct gcc test).  Since the header IS present and valid, force the
-# define in config.h before compilation begins.
-_config_h="${BUILD_UNIFIED}/include/config.h"
-if [ -f "$_config_h" ]; then
+_force_ntsync_define() {
+    local build_dir="$1"
+    local _config_h="${build_dir}/include/config.h"
+    [ -f "$_config_h" ] || return 0
     if grep -q "undef HAVE_LINUX_NTSYNC_H" "$_config_h"; then
         if [ -f "/usr/include/x86_64-linux-gnu/linux/ntsync.h" ] || \
            [ -f "/usr/include/linux/ntsync.h" ]; then
@@ -687,7 +660,10 @@ if [ -f "$_config_h" ]; then
                 's|/\* #undef HAVE_LINUX_NTSYNC_H \*/|#define HAVE_LINUX_NTSYNC_H 1|' \
                 "$_config_h"
             ok "Patched config.h: HAVE_LINUX_NTSYNC_H 1 (header confirmed present)"
-            _server_build="${BUILD_UNIFIED}/server"
+            # Wipe server object files so ccache is forced to recompile them
+            # with the patched config.h — ccache would otherwise return stale
+            # objects compiled with HAVE_LINUX_NTSYNC_H=0.
+            local _server_build="${build_dir}/server"
             if [ -d "$_server_build" ]; then
                 find "$_server_build" -name '*.o' -delete 2>/dev/null || true
                 ok "Server objects wiped — will recompile with ntsync enabled"
@@ -696,58 +672,250 @@ if [ -f "$_config_h" ]; then
     else
         ok "HAVE_LINUX_NTSYNC_H already defined in config.h"
     fi
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Per-architecture extra configure args
+#
+#  FFmpeg: GE-based trees (mythix-ge pipeline) drop winegstreamer and decode
+#  media through winedmo + FFmpeg.  neutron-builder.sh builds a static FFmpeg
+#  per arch; link it in so winedmo.so carries its own codecs.
+#  OpenXR: GE's wineopenxr links -lopenxr_loader; without the loader dev
+#  files for an arch, disable the module there instead of failing the link.
+# ══════════════════════════════════════════════════════════════════════════════
+_extra_args_for_arch() {   # <array-name> <ffmpeg-prefix> <pkg-config-libdir>
+    local -n _out="$1"
+    local ff="$2" pcdir="$3"
+    _out=()
+    if [ -n "$ff" ] && [ -f "${ff}/ffmpeg-libs.txt" ]; then
+        _out+=( "--with-ffmpeg"
+                "FFMPEG_CFLAGS=-I${ff}/include"
+                "FFMPEG_LIBS=$(cat "${ff}/ffmpeg-libs.txt")" )
+        ok "FFmpeg (static): ${ff}"
+    fi
+    if [ -d "${WINE_SOURCE_DIR}/dlls/wineopenxr" ] && \
+       ! PKG_CONFIG_LIBDIR="$pcdir" pkg-config --exists openxr 2>/dev/null; then
+        _out+=( "--disable-wineopenxr" )
+        warn "OpenXR loader dev files not found (${pcdir%%:*}) — wineopenxr disabled for this arch"
+    fi
+}
+_extra_64=(); _extra_32=()
+_extra_args_for_arch _extra_64 "${NEUTRON_FFMPEG_PREFIX_64:-}" \
+    "/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
+if [ "${SKIP_32BIT}" != "true" ]; then
+    _extra_args_for_arch _extra_32 "${NEUTRON_FFMPEG_PREFIX_32:-}" \
+        "/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
 fi
 
-_make_compile_bar unified -j"${JOBS}"
-ok "Unified wow64 build complete"
+if [ "$NEUTRON_BUILD_MODE" = "classic" ]; then
+    # ══════════════════════════════════════════════════════════════════════════
+    #  Classic multilib — 64-bit tree (--enable-win64) + 32-bit tree
+    #  (--with-wine64).  Produces bin/wine64 + bin/wine; Mythix Wine's layout.
+    # ══════════════════════════════════════════════════════════════════════════
+    sep "64-bit configure  (classic)"
+    mkdir -p "$BUILD64"
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  i386-unix drivers  (separate 32-bit Wine build)
-#
-#  The unified --enable-archs build only produces x86_64-unix .so drivers.
-#  i386-unix drivers (ntdll.so, win32u.so, etc.) are needed for wow64
-#  thunking and must be built separately using a 32-bit native compiler.
-#  This matches how Valve builds Proton: a separate Wine configure with
-#  --host=i686-linux-gnu produces the ~39 i386-unix .so files.
-# ══════════════════════════════════════════════════════════════════════════════
-if [ "${SKIP_32BIT}" != "true" ]; then
-    sep "i386-unix configure  (32-bit native drivers)"
-    mkdir -p "$BUILD_I386_UNIX"
-
-    export CC="$(_wrap_cc i686-linux-gnu-gcc)"
-    export CXX="$(_wrap_cc i686-linux-gnu-g++)"
-    unset CROSSCC CROSSCXX i386_CC
-
-    export PKG_CONFIG_PATH="/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
+    export CC="$(_wrap_cc gcc)"
+    export CXX="$(_wrap_cc g++)"
+    # MinGW PE cross-compilers for --with-mingw
+    export CROSSCC="$(_wrap_cc "${MINGW_CC_64:-x86_64-w64-mingw32-gcc}")"
+    export CROSSCXX="$(_wrap_cc "${MINGW_CXX_64:-x86_64-w64-mingw32-g++}")"
+    export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
     export PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH}"
-    export LDFLAGS="${LDFLAGS:-} -L/usr/lib/i386-linux-gnu -L/lib/i386-linux-gnu ${_lto_flags}"
+    export LDFLAGS="${LDFLAGS:-} -L/usr/lib/x86_64-linux-gnu -L/lib/x86_64-linux-gnu ${_lto_flags}"
     export CFLAGS="${_opt_flags} ${_lto_flags}"
     export CXXFLAGS="${_opt_flags} ${_lto_flags}"
 
-    if ! command -v i686-linux-gnu-gcc >/dev/null 2>&1; then
-        warn "i686-linux-gnu-gcc not found — skipping i386-unix drivers"
-        warn "Install: sudo apt install gcc-i686-linux-gnu g++-i686-linux-gnu"
-        warn "Without these, 32-bit games will fail with 'kernel32.dll status c0000135'"
-    else
-        msg2 "CC           = ${CC}"
-        msg2 "PKG_PATH     = ${PKG_CONFIG_PATH}"
+    msg2 "CC       = ${CC}"
+    msg2 "CROSSCC  = ${CROSSCC}"
+    msg2 "PKG_PATH = ${PKG_CONFIG_PATH}"
 
-        cd "$BUILD_I386_UNIX"
-        if _needs_configure "$BUILD_I386_UNIX"; then
+    cd "$BUILD64"
+    if _needs_configure "$BUILD64"; then
+        _run_configure "${WINE_SOURCE_DIR}/configure" \
+            --prefix="${INSTALL_PREFIX}" \
+            --enable-win64 \
+            --build=x86_64-linux-gnu \
+            CPPFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu" \
+            ${OPENCL_LIBS:+OPENCL_LIBS="${OPENCL_LIBS}"} \
+            "${_args_common[@]+"${_args_common[@]}"}" \
+            "${_args_64[@]+"${_args_64[@]}"}" \
+            "${_extra_64[@]+"${_extra_64[@]}"}"
+    fi
+
+    sep "64-bit compile  (jobs=${JOBS})"
+    _force_ntsync_define "$BUILD64"
+    _make_compile_bar 64 -j"${JOBS}"
+    ok "64-bit build complete"
+
+    # ── 32-bit tree  (cross-compile via i686-linux-gnu-gcc) ──────────────────
+    # i686-linux-gnu-gcc is a genuine cross-compiler triplet, so autoconf
+    # treats it as cross and skips execute tests (a -m32 wrapper would not).
+    if [ "${SKIP_32BIT}" = "true" ]; then
+        msg2 "SKIP_32BIT=true — skipping 32-bit build"
+    else
+        sep "32-bit configure  (classic, cross-compile)"
+
+        _CC32="i686-linux-gnu-gcc"
+        _CXX32="i686-linux-gnu-g++"
+
+        command -v "$_CC32" >/dev/null 2>&1 || \
+            err "32-bit cross-compiler not found: $_CC32
+         Install: sudo apt install gcc-i686-linux-gnu g++-i686-linux-gnu"
+
+        mkdir -p "$BUILD32"
+
+        export CC="$(_wrap_cc "$_CC32")"
+        export CXX="$(_wrap_cc "$_CXX32")"
+        # 32-bit MinGW PE cross-compiler
+        export CROSSCC="$(_wrap_cc "${MINGW_CC_32:-i686-w64-mingw32-gcc}")"
+        export CROSSCXX="$(_wrap_cc "${MINGW_CXX_32:-i686-w64-mingw32-g++}")"
+        # i386_CC is the per-arch CC used by newer Wine multi-arch builds
+        export i386_CC="${CROSSCC}"
+
+        export PKG_CONFIG_LIBDIR="/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
+        export PKG_CONFIG_PATH="${PKG_CONFIG_LIBDIR}"
+
+        export CFLAGS="-I/usr/include/freetype2 -I/usr/include/wayland"
+        export CPPFLAGS="-I/usr/include/freetype2 -I/usr/include/wayland"
+        export LDFLAGS="-L/usr/lib/i386-linux-gnu -L/usr/lib32 -L/lib/i386-linux-gnu -lm"
+
+        msg2 "CC       = ${CC}"
+        msg2 "CROSSCC  = ${CROSSCC}"
+        msg2 "PKG_PATH = ${PKG_CONFIG_PATH}"
+
+        cd "$BUILD32"
+        if _needs_configure "$BUILD32"; then
             _run_configure "${WINE_SOURCE_DIR}/configure" \
                 --prefix="${INSTALL_PREFIX}" \
+                --with-wine64="${BUILD64}" \
+                --with-wine-tools="${BUILD64}" \
+                --with-freetype \
+                --build=x86_64-linux-gnu \
                 --host=i686-linux-gnu \
-                --without-mingw \
-                --disable-tests \
-                CPPFLAGS="-I/usr/include -I/usr/include/i386-linux-gnu" \
                 ${OPENCL_LIBS:+OPENCL_LIBS="${OPENCL_LIBS}"} \
                 "${_args_common[@]+"${_args_common[@]}"}" \
-                "${_args_32[@]+"${_args_32[@]}"}"
+                "${_args_32[@]+"${_args_32[@]}"}" \
+                "${_extra_32[@]+"${_extra_32[@]}"}"
         fi
 
-        sep "i386-unix compile  (jobs=${JOBS})"
+        sep "32-bit compile  (jobs=${JOBS})"
         _make_compile_bar 32 -j"${JOBS}"
-        ok "i386-unix drivers built"
+        ok "32-bit build complete"
+    fi
+else
+    # ══════════════════════════════════════════════════════════════════════════════
+    #  Unified wow64 build  (--enable-archs=i386,x86_64)
+    #
+    #  Single configure + single build tree produces both architectures.
+    #  The 64-bit wine binary handles 32-bit PE via wow64 thunking — no separate
+    #  32-bit wine binary or full set of i386-unix .so files.  This matches how
+    #  Valve builds Proton's wine and is required for bleeding-edge sources.
+    # ══════════════════════════════════════════════════════════════════════════════
+    sep "Unified wow64 configure"
+    mkdir -p "$BUILD_UNIFIED"
+
+    # 64-bit host compiler
+    export CC="$(_wrap_cc gcc)"
+    export CXX="$(_wrap_cc g++)"
+    # In --enable-archs mode, Wine uses CROSSCC for x86_64 PE modules and
+    # i386_CC for i386 PE modules.  Both must be MinGW cross-compilers.
+    # i386-unix drivers are built in a separate tree (wine-i386-unix) using
+    # i686-linux-gnu-gcc as a cross-compiler — see the i386-unix section below.
+    export CROSSCC="$(_wrap_cc "${MINGW_CC_64:-x86_64-w64-mingw32-gcc}")"
+    export CROSSCXX="$(_wrap_cc "${MINGW_CXX_64:-x86_64-w64-mingw32-g++}")"
+    export i386_CC="$(_wrap_cc "${MINGW_CC_32:-i686-w64-mingw32-gcc}")"
+
+    export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
+    export PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH}"
+    export LDFLAGS="${LDFLAGS:-} -L/usr/lib/x86_64-linux-gnu -L/lib/x86_64-linux-gnu ${_lto_flags}"
+    export CFLAGS="${_opt_flags} ${_lto_flags}"
+    export CXXFLAGS="${_opt_flags} ${_lto_flags}"
+
+    # Verify 32-bit MinGW cross-compiler is available (unless skipping 32-bit)
+    if [ "${SKIP_32BIT}" != "true" ]; then
+        command -v "${MINGW_CC_32:-i686-w64-mingw32-gcc}" >/dev/null 2>&1 || \
+            err "32-bit MinGW cross-compiler not found: ${MINGW_CC_32:-i686-w64-mingw32-gcc}
+             Install: sudo apt install gcc-mingw-w64-i686 g++-mingw-w64-i686"
+    fi
+
+    msg2 "CC           = ${CC}"
+    msg2 "CROSSCC      = ${CROSSCC}"
+    msg2 "i386_CC      = ${i386_CC}"
+    msg2 "PKG_PATH     = ${PKG_CONFIG_PATH}"
+
+    cd "$BUILD_UNIFIED"
+    if _needs_configure "$BUILD_UNIFIED"; then
+        _configure_archs="x86_64"
+        [ "${SKIP_32BIT}" != "true" ] && _configure_archs="i386,x86_64"
+
+        _run_configure "${WINE_SOURCE_DIR}/configure" \
+            --prefix="${INSTALL_PREFIX}" \
+            --enable-archs="${_configure_archs}" \
+            --build=x86_64-linux-gnu \
+            CPPFLAGS="-I/usr/include -I/usr/include/x86_64-linux-gnu" \
+            ${OPENCL_LIBS:+OPENCL_LIBS="${OPENCL_LIBS}"} \
+            "${_args_common[@]+"${_args_common[@]}"}" \
+            "${_args_64[@]+"${_args_64[@]}"}" \
+            "${_extra_64[@]+"${_extra_64[@]}"}"
+    fi
+
+    sep "Unified compile  (jobs=${JOBS})"
+
+    _force_ntsync_define "$BUILD_UNIFIED"
+
+    _make_compile_bar unified -j"${JOBS}"
+    ok "Unified wow64 build complete"
+
+    # ══════════════════════════════════════════════════════════════════════════════
+    #  i386-unix drivers  (separate 32-bit Wine build)
+    #
+    #  The unified --enable-archs build only produces x86_64-unix .so drivers.
+    #  i386-unix drivers (ntdll.so, win32u.so, etc.) are needed for wow64
+    #  thunking and must be built separately using a 32-bit native compiler.
+    #  This matches how Valve builds Proton: a separate Wine configure with
+    #  --host=i686-linux-gnu produces the ~39 i386-unix .so files.
+    # ══════════════════════════════════════════════════════════════════════════════
+    if [ "${SKIP_32BIT}" != "true" ]; then
+        sep "i386-unix configure  (32-bit native drivers)"
+        mkdir -p "$BUILD_I386_UNIX"
+
+        export CC="$(_wrap_cc i686-linux-gnu-gcc)"
+        export CXX="$(_wrap_cc i686-linux-gnu-g++)"
+        unset CROSSCC CROSSCXX i386_CC
+
+        export PKG_CONFIG_PATH="/usr/lib/i386-linux-gnu/pkgconfig:/usr/share/pkgconfig:/usr/lib/pkgconfig"
+        export PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH}"
+        export LDFLAGS="${LDFLAGS:-} -L/usr/lib/i386-linux-gnu -L/lib/i386-linux-gnu ${_lto_flags}"
+        export CFLAGS="${_opt_flags} ${_lto_flags}"
+        export CXXFLAGS="${_opt_flags} ${_lto_flags}"
+
+        if ! command -v i686-linux-gnu-gcc >/dev/null 2>&1; then
+            warn "i686-linux-gnu-gcc not found — skipping i386-unix drivers"
+            warn "Install: sudo apt install gcc-i686-linux-gnu g++-i686-linux-gnu"
+            warn "Without these, 32-bit games will fail with 'kernel32.dll status c0000135'"
+        else
+            msg2 "CC           = ${CC}"
+            msg2 "PKG_PATH     = ${PKG_CONFIG_PATH}"
+
+            cd "$BUILD_I386_UNIX"
+            if _needs_configure "$BUILD_I386_UNIX"; then
+                _run_configure "${WINE_SOURCE_DIR}/configure" \
+                    --prefix="${INSTALL_PREFIX}" \
+                    --host=i686-linux-gnu \
+                    --without-mingw \
+                    --disable-tests \
+                    CPPFLAGS="-I/usr/include -I/usr/include/i386-linux-gnu" \
+                    ${OPENCL_LIBS:+OPENCL_LIBS="${OPENCL_LIBS}"} \
+                    "${_args_common[@]+"${_args_common[@]}"}" \
+                    "${_args_32[@]+"${_args_32[@]}"}" \
+                    "${_extra_32[@]+"${_extra_32[@]}"}"
+            fi
+
+            sep "i386-unix compile  (jobs=${JOBS})"
+            _make_compile_bar 32 -j"${JOBS}"
+            ok "i386-unix drivers built"
+        fi
     fi
 fi
 
@@ -765,29 +933,46 @@ _verify_artifact() {
     fi
 }
 
-_verify_artifact "${BUILD_UNIFIED}/loader/wine"        "wine loader  (unified tree)"
-_verify_artifact "${BUILD_UNIFIED}/server/wineserver"  "wineserver   (unified tree)"
+if [ "$NEUTRON_BUILD_MODE" = "classic" ]; then
+    _verify_artifact "${BUILD64}/loader/wine"        "wine loader  (64-bit tree)"
+    _verify_artifact "${BUILD64}/server/wineserver"  "wineserver   (64-bit tree)"
+    if [ "${SKIP_32BIT}" != "true" ]; then
+        _verify_artifact "${BUILD32}/loader/wine"    "wine loader  (32-bit tree)"
+    fi
+else
+    _verify_artifact "${BUILD_UNIFIED}/loader/wine"        "wine loader  (unified tree)"
+    _verify_artifact "${BUILD_UNIFIED}/server/wineserver"  "wineserver   (unified tree)"
+fi
 
 # Proton-specific: verify that at least one PE module was built with MinGW.
 # If --with-mingw succeeded, we should see *.dll files in the build tree.
-_pe_count=$(find "${BUILD_UNIFIED}" -name '*.dll' -maxdepth 4 2>/dev/null | wc -l)
+_pe_count=$(find "${BUILD64}" -maxdepth 4 -name '*.dll' 2>/dev/null | wc -l)
 if [ "$_pe_count" -gt 0 ]; then
     ok "MinGW PE modules present (${_pe_count} .dll files found in 64-bit tree)"
 else
-    warn "No .dll files found in unified build tree"
+    warn "No .dll files found in the 64-bit build tree"
     warn "This suggests --with-mingw did not produce PE modules."
     warn "Check that x86_64-w64-mingw32-gcc is installed and working."
 fi
 
-# i386-unix driver verification
-if [ "${SKIP_32BIT}" != "true" ] && [ -d "${BUILD_I386_UNIX}" ]; then
-    _so_count=$(find "${BUILD_I386_UNIX}/dlls" -name '*.so' -maxdepth 3 2>/dev/null | wc -l)
+# i386-unix driver verification (wow64 mode)
+if [ "$NEUTRON_BUILD_MODE" = "wow64" ] && [ "${SKIP_32BIT}" != "true" ] && [ -d "${BUILD_I386_UNIX}" ]; then
+    _so_count=$(find "${BUILD_I386_UNIX}/dlls" -maxdepth 3 -name '*.so' 2>/dev/null | wc -l)
     if [ "$_so_count" -gt 0 ]; then
         ok "i386-unix drivers present (${_so_count} .so files)"
         _verify_artifact "${BUILD_I386_UNIX}/dlls/ntdll/ntdll.so" "ntdll.so     (i386-unix)"
         _verify_artifact "${BUILD_I386_UNIX}/dlls/win32u/win32u.so" "win32u.so    (i386-unix)"
     else
         warn "No i386-unix .so drivers found — 32-bit games may not work"
+    fi
+fi
+
+# winedmo media backend (FFmpeg) — only meaningful when FFmpeg was supplied
+if [ -n "${NEUTRON_FFMPEG_PREFIX_64:-}" ]; then
+    if [ -f "${BUILD64}/dlls/winedmo/winedmo.so" ]; then
+        ok "winedmo.so built with static FFmpeg (64-bit)"
+    else
+        warn "winedmo.so missing in the 64-bit tree — media playback will not work"
     fi
 fi
 

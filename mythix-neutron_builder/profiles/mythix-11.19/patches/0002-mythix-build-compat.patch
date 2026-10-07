@@ -1,0 +1,26 @@
+Mythix build compat for mythix-11.19 — source-level shims so the GE stack
+builds against the Ubuntu 24.04 container's older system libraries.
+Each shim is a no-op when the newer library is present (guarded by #ifndef /
+version checks), so the same tree builds natively on current distros too.
+
+  * winewayland.drv: XKB_VMOD_NAME_SCROLL (libxkbcommon >= 1.7)
+
+Curated 2026-10-06 against the mythix-11.19 tree (GE a3f58c5 + 0001).
+---
+diff --git a/dlls/winewayland.drv/wayland_keyboard.c b/dlls/winewayland.drv/wayland_keyboard.c
+index 41397717..359dee56 100644
+--- a/dlls/winewayland.drv/wayland_keyboard.c
++++ b/dlls/winewayland.drv/wayland_keyboard.c
+@@ -36,6 +36,12 @@
+ #include "wine/debug.h"
+ #include "wine/server.h"
+ 
++/* Mythix build compat: libxkbcommon < 1.7 (Ubuntu 24.04 ships 1.6) lacks the
++ * virtual modifier name macros; the values are fixed by the XKB spec. */
++#ifndef XKB_VMOD_NAME_SCROLL
++#define XKB_VMOD_NAME_SCROLL "ScrollLock"
++#endif
++
+ WINE_DEFAULT_DEBUG_CHANNEL(keyboard);
+ WINE_DECLARE_DEBUG_CHANNEL(key);
+ 

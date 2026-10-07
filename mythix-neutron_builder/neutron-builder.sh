@@ -242,6 +242,15 @@ PATCHER="${_LIB_DIR}/neutron-patcher.sh"
 PATCHES_DIR="${_LIB_DIR}/patches"
 PATCH_GROUPS=""            # space-separated group names, "all", "none", or "" (interactive)
 
+# ── Build profiles (pinned, reproducible Mythix Wine recipes) ─────────────────
+PROFILES_DIR="${_LIB_DIR}/profiles"
+PROFILE_NAME=""            # --profile NAME|DIR  →  profiles/<name>/profile.conf
+PROFILE_DIR=""             # resolved by _load_profile
+NEUTRON_BUILD_MODE="${NEUTRON_BUILD_MODE:-}"  # --build-mode classic|wow64 ("" = per source)
+ALLOW_PATCH_FAILURES=false # --allow-patch-failures: let profile patch layers fail (curation work)
+GE_PIPELINE="${_LIB_DIR}/mythix-ge-pipeline.sh"
+FFMPEG_BUILDER="${_LIB_DIR}/mythix-ffmpeg-build.sh"
+
 # ── Build tuning toggles ──────────────────────────────────────────────────────
 NO_CCACHE=false           # --no-ccache: disable ccache entirely
 KEEP_SYMBOLS=false        # --keep-symbols: skip strip, keep debug info
@@ -266,6 +275,15 @@ ${C_B}Wine source (required):${C_R}
                         proton_10.0 = Wine 10.0 + fsync (stable, wide compat)
                         bleeding-edge = latest experimental (ntsync, newest features)
   --no-pull             Skip git pull on an existing source tree
+
+${C_B}Build profiles (pinned Mythix Wine recipes):${C_R}
+  --profile NAME        Build a pinned profile from profiles/NAME (or a profile dir).
+                        Sets --source mythix-wine, the package name, build mode and
+                        patch groups; every upstream input is pinned + source-locked.
+  --list-profiles       Show the available profiles
+  --build-mode MODE     classic (wine64 + 32-bit tree) | wow64 (unified)
+                        Default: the profile's mode; mythix-wine → classic; others → wow64
+  --allow-patch-failures  Keep going when a profile patch layer fails (for re-curating)
 
 ${C_B}Component selection:${C_R}
   --dxvk NAME           DXVK variant: dxvk-release (default) | dxvk | dxvk-async | none
@@ -313,6 +331,8 @@ ${C_B}General:${C_R}
   -h | --help           Show this help
 
 ${C_B}Examples:${C_R}
+  $0 --profile mythix-11.19 --container       # Mythix Wine 11.19 (Wayland-first), pinned
+  $0 --profile mythix-10.17 --container       # rebuild the frozen 10.17 esync/fsync build
   $0                                          # interactive source + version menu
   $0 --source mainline                        # WineHQ stable (version picker)
   $0 --source staging                         # WineHQ + staging patches (version picker)
@@ -354,7 +374,11 @@ while [ "$#" -gt 0 ]; do
         --dest)         DEST_ROOT="$2";          shift 2 ;;
         --src-dir)      SRC_ROOT="$2";           shift 2 ;;
         --name)         BUILD_NAME="$2";         shift 2 ;;
-        --wine-base)    MYTHIX_WINE_BASE="$2";   shift 2 ;;
+        --wine-base)    MYTHIX_WINE_BASE="$2"; _WINE_BASE_SET=true; shift 2 ;;
+        --profile)      PROFILE_NAME="$2";       shift 2 ;;
+        --list-profiles) _LIST_PROFILES=true;    shift   ;;
+        --build-mode)   NEUTRON_BUILD_MODE="$2"; shift 2 ;;
+        --allow-patch-failures) ALLOW_PATCH_FAILURES=true; shift ;;
         --jobs)         JOBS="$2";               shift 2 ;;
         --skip-32)      SKIP_32BIT=true;         shift   ;;
         --no-ccache)    NO_CCACHE=true;          shift   ;;
@@ -414,6 +438,112 @@ if [ "${_LIST_MODE:-false}" = "true" ]; then
         printf "  ${C_CYN}%-36s${C_R}  %-28s  %s\n" "$_name" "$_ver" "$_size"
     done
     printf "\n"
+    exit 0
+fi
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Build profiles
+#
+#  A profile is a pinned recipe for one Mythix Wine flavour:
+#    profiles/<name>/profile.conf   — pins + build settings (sourced here)
+#    profiles/<name>/patches/*.patch — curated layers (ge pipeline only)
+#  See profiles/README.md.
+# ══════════════════════════════════════════════════════════════════════════════
+_PROFILE_VARS=( PROFILE_DESC PROFILE_PIPELINE PROFILE_BUILD_MODE PROFILE_PACKAGE_NAME
+                PROFILE_VERSION_LABEL PROFILE_WAYLAND PROFILE_PATCH_GROUPS PROFILE_FFMPEG
+                LEGACY_WINE_BASE PIN_WINE_REPO PIN_WINE_COMMIT PIN_TKG_COMMIT
+                PIN_STAGING_REPO PIN_STAGING_COMMIT PIN_STAGING_REF PIN_GE_REPO
+                PIN_GE_COMMIT PIN_FFMPEG_REPO PIN_FFMPEG_COMMIT TKG_SOURCE )
+
+_resolve_profile_dir() {
+    local p="$1"
+    if [ -f "${PROFILES_DIR}/${p}/profile.conf" ]; then
+        printf '%s' "${PROFILES_DIR}/${p}"
+    elif [ -f "${p}/profile.conf" ]; then
+        (cd "$p" && pwd)
+    else
+        return 1
+    fi
+}
+
+_list_profiles() {
+    section "Build profiles  (${PROFILES_DIR})"
+    local conf found=false
+    for conf in "${PROFILES_DIR}"/*/profile.conf; do
+        [ -f "$conf" ] || continue
+        found=true
+        (
+            unset "${_PROFILE_VARS[@]}"
+            # shellcheck source=/dev/null
+            . "$conf"
+            printf "\n  ${C_CYN}${C_B}%-16s${C_R} %s\n" "$(basename "$(dirname "$conf")")" "${PROFILE_DESC:-}"
+            printf "  ${C_DIM}%-16s pipeline=%s  mode=%s  package=%s  wayland=%s  patches=%s${C_R}\n" "" \
+                "${PROFILE_PIPELINE:-?}" "${PROFILE_BUILD_MODE:-?}" "${PROFILE_PACKAGE_NAME:-?}" \
+                "${PROFILE_WAYLAND:-0}" "${PROFILE_PATCH_GROUPS:-none}"
+        )
+    done
+    [ "$found" = "true" ] || msg2 "No profiles found."
+    printf "\n  Build one with:  %s --profile <name> [--container]\n\n" "$(basename "$0")"
+}
+
+_load_profile() {
+    PROFILE_DIR="$(_resolve_profile_dir "$1")" || \
+        err "Unknown profile: '$1'
+     Expected ${PROFILES_DIR}/$1/profile.conf (or a directory containing profile.conf).
+     See: $(basename "$0") --list-profiles"
+
+    unset "${_PROFILE_VARS[@]}"
+    # shellcheck source=/dev/null
+    . "${PROFILE_DIR}/profile.conf"
+    PROFILE_NAME="$(basename "$PROFILE_DIR")"
+
+    case "${PROFILE_PIPELINE:-}" in
+        ge|legacy) ;;
+        *) err "Profile ${PROFILE_NAME}: PROFILE_PIPELINE must be 'ge' or 'legacy' (got '${PROFILE_PIPELINE:-}')" ;;
+    esac
+    case "${PROFILE_BUILD_MODE:-classic}" in
+        classic|wow64) ;;
+        *) err "Profile ${PROFILE_NAME}: PROFILE_BUILD_MODE must be 'classic' or 'wow64'" ;;
+    esac
+    [ -n "${PROFILE_PACKAGE_NAME:-}" ] || err "Profile ${PROFILE_NAME}: PROFILE_PACKAGE_NAME is not set"
+
+    # A profile always builds Mythix Wine, from its own pins.
+    if [ -n "$WINE_SOURCE_KEY" ] && [ "$WINE_SOURCE_KEY" != "mythix-wine" ]; then
+        err "--profile builds Mythix Wine — it can't be combined with --source ${WINE_SOURCE_KEY}"
+    fi
+    [ -z "$WINE_SOURCE_BRANCH_ARG" ] || \
+        err "--branch can't be combined with --profile (the profile pins every source)"
+    WINE_SOURCE_KEY="mythix-wine"
+
+    if [ "$PROFILE_PIPELINE" = "legacy" ]; then
+        [ -n "${LEGACY_WINE_BASE:-}" ] || err "Profile ${PROFILE_NAME}: LEGACY_WINE_BASE is not set"
+        if [ "${_WINE_BASE_SET:-false}" = "true" ] && [ "$MYTHIX_WINE_BASE" != "$LEGACY_WINE_BASE" ]; then
+            warn "--wine-base ${MYTHIX_WINE_BASE} ignored — profile ${PROFILE_NAME} pins ${LEGACY_WINE_BASE}"
+        fi
+        MYTHIX_WINE_BASE="$LEGACY_WINE_BASE"
+    else
+        [ -n "${PIN_GE_COMMIT:-}" ] || err "Profile ${PROFILE_NAME}: PIN_GE_COMMIT is not set"
+        [ -f "$GE_PIPELINE" ] || err "GE pipeline script not found: $GE_PIPELINE"
+    fi
+
+    # Profile defaults — explicit flags win.
+    [ -n "$BUILD_NAME" ]         || BUILD_NAME="$PROFILE_PACKAGE_NAME"
+    [ -n "$PATCH_GROUPS" ]       || PATCH_GROUPS="${PROFILE_PATCH_GROUPS:-none}"
+    [ -n "$NEUTRON_BUILD_MODE" ] || NEUTRON_BUILD_MODE="${PROFILE_BUILD_MODE:-classic}"
+
+    section "Profile: ${PROFILE_NAME}"
+    msg  "${PROFILE_DESC:-}"
+    msg2 "Pipeline    : ${PROFILE_PIPELINE}"
+    msg2 "Build mode  : ${NEUTRON_BUILD_MODE}"
+    msg2 "Package     : ${BUILD_NAME}"
+    msg2 "Wayland     : $([ "${PROFILE_WAYLAND:-0}" = "1" ] && echo "on (launcher default)" || echo off)"
+    msg2 "Patch groups: ${PATCH_GROUPS}"
+    [ "${PROFILE_FFMPEG:-none}" != "none" ] && msg2 "FFmpeg      : ${PROFILE_FFMPEG} (winedmo media backend)"
+    ok "Profile loaded: ${PROFILE_DIR}"
+}
+
+if [ "${_LIST_PROFILES:-false}" = "true" ]; then
+    _list_profiles
     exit 0
 fi
 
@@ -615,6 +745,21 @@ _run_container_build() {
         fi
     fi
 
+    # Rebuild when Containerfile.neutron changed since the image was built
+    # (new build deps would otherwise never reach an existing image).
+    local _cf_sum _img_sum
+    _cf_sum="$(sha256sum "$containerfile" | cut -d' ' -f1)"
+    if [ "$_need_build" = "false" ]; then
+        _img_sum="$("$engine" image inspect \
+            --format '{{ index .Config.Labels "mythix.containerfile.sha256" }}' \
+            "$image_name" 2>/dev/null || true)"
+        if [ "$_img_sum" != "$_cf_sum" ]; then
+            warn "Containerfile.neutron changed since the image was built — rebuilding"
+            "$engine" rmi -f "$image_name" >/dev/null 2>&1 || true
+            _need_build=true
+        fi
+    fi
+
     if [ "$_need_build" = "true" ]; then
         section "Building container image"
         msg "Building ${image_name} (this takes a few minutes)..."
@@ -625,6 +770,7 @@ _run_container_build() {
             --build-arg "BUILD_USER=$(whoami)" \
             --build-arg "BUILD_UID=$(id -u)" \
             --build-arg "BUILD_GID=$(id -g)" \
+            --label "mythix.containerfile.sha256=${_cf_sum}" \
             -t "$image_name" \
             -f "$containerfile" \
             "$_build_context"
@@ -661,6 +807,20 @@ _run_container_build() {
     [ "$DRY_RUN" -eq 1 ]            && inner_args+=( "--dry-run" )
     [ "$SNIPER_MODE" = "true" ]      && inner_args+=( "--sniper" )
     [ -n "$PATCH_GROUPS" ]           && inner_args+=( "--patches" "$PATCH_GROUPS" )
+    [ -n "$NEUTRON_BUILD_MODE" ]     && inner_args+=( "--build-mode" "$NEUTRON_BUILD_MODE" )
+    [ "$ALLOW_PATCH_FAILURES" = "true" ] && inner_args+=( "--allow-patch-failures" )
+
+    # Profiles inside the script dir are visible in the container (the script
+    # dir is mounted); a profile kept elsewhere gets its own read-only mount.
+    local -a profile_mount=()
+    if [ -n "$PROFILE_DIR" ]; then
+        if [ "$PROFILE_DIR" = "${PROFILES_DIR}/${PROFILE_NAME}" ]; then
+            inner_args+=( "--profile" "$PROFILE_NAME" )
+        else
+            profile_mount=( -v "${PROFILE_DIR}:/profiles/${PROFILE_NAME}:ro,${vol_flag#:}" )
+            inner_args+=( "--profile" "/profiles/${PROFILE_NAME}" )
+        fi
+    fi
 
     # ── Resolve mount paths ──────────────────────────────────────────────
     # Two bind mounts:
@@ -721,6 +881,7 @@ _run_container_build() {
         -v "${_LIB_DIR}:${container_home}${vol_flag}" \
         -v "${_self}:${container_home}/neutron-builder.sh:ro,${vol_flag#:}" \
         "${cfg_mount[@]}" \
+        "${profile_mount[@]+"${profile_mount[@]}"}" \
         -v "${_DATA_DIR}:${container_data}${vol_flag}" \
         -v "mythix-neutron_builder-ccache:/home/$(whoami)/.ccache${vol_flag}" \
         "$image_name" \
@@ -1560,53 +1721,82 @@ install_wine() {
     local build_unified="${build_run_dir}/wine-unified"
     local build64="${build_run_dir}/wine64"
 
-    if [ -d "$build_unified" ]; then
-        msg2 "make install  (unified wow64 tree)"
-        _install_logged -C "$build_unified"
-        ok "Unified wow64 Wine installed"
-        local build_i386_unix="${build_run_dir}/wine-i386-unix"
-        if [ -d "$build_i386_unix" ] && [ -f "$build_i386_unix/Makefile" ]; then
-            msg2 "Installing i386-unix drivers (unix .so files only)"
-            local i386_unix_dest="${install_prefix}/lib/wine/i386-unix"
-            mkdir -p "$i386_unix_dest"
-            # Install the wine/wine-preloader 32-bit loaders
-            for f in "$build_i386_unix"/loader/wine "$build_i386_unix"/loader/wine-preloader; do
-                [ -f "$f" ] && install -m 755 "$f" "$i386_unix_dest/" && \
-                    msg2 "  $(basename "$f")"
-            done
-            # Install the 64-bit compat loader as wine64 in i386-unix (Proton convention)
-            if [ -f "${install_prefix}/lib/wine/x86_64-unix/wine64" ]; then
-                install -m 755 "${install_prefix}/lib/wine/x86_64-unix/wine64" "$i386_unix_dest/"
-                msg2 "  wine64 (from x86_64-unix)"
-            fi
-            if [ -f "${install_prefix}/lib/wine/x86_64-unix/wine64-preloader" ]; then
-                install -m 755 "${install_prefix}/lib/wine/x86_64-unix/wine64-preloader" "$i386_unix_dest/"
-                msg2 "  wine64-preloader (from x86_64-unix)"
-            fi
-            # Install all .so unix drivers
-            local _so_count=0
-            for f in "$build_i386_unix"/dlls/*/*.so; do
-                [ -f "$f" ] || continue
-                install -m 644 "$f" "$i386_unix_dest/"
-                _so_count=$(( _so_count + 1 ))
-            done
-            ok "i386-unix: ${_so_count} .so drivers + loaders installed"
-        fi
-    elif [ -d "$build64" ]; then
-        msg2 "make install  (64-bit tree — legacy two-tree mode)"
-        _install_logged -C "$build64"
-        ok "64-bit Wine installed"
-        local build32="${build_run_dir}/wine32"
-        if [ "${SKIP_32BIT}" != "true" ] && [ -d "$build32" ]; then
-            msg2 "make install  (32-bit)"
-            _install_logged -C "$build32"
-            ok "32-bit Wine installed"
-        fi
-    else
-        err "No build tree found in ${build_run_dir}"
+    # The build mode decides which trees are installed — never guess from
+    # whatever trees happen to exist (a stale tree from an earlier build in
+    # the other mode would win otherwise).
+    local mode="${NEUTRON_BUILD_MODE:-}"
+    if [ -z "$mode" ]; then
+        if [ -d "$build_unified" ]; then mode="wow64"; else mode="classic"; fi
     fi
 
+    case "$mode" in
+        wow64)
+            [ -f "${build_unified}/Makefile" ] || err "No wow64 build tree found: ${build_unified}"
+            _install_wine_wow64 "$build_run_dir" "$install_prefix"
+            ;;
+        classic)
+            [ -f "${build64}/Makefile" ] || err "No classic 64-bit build tree found: ${build64}"
+            _install_wine_classic "$build_run_dir" "$install_prefix"
+            ;;
+        *)
+            err "Unknown build mode: ${mode}"
+            ;;
+    esac
+
     ok "Wine installed to: $install_prefix"
+}
+
+_install_wine_wow64() {
+    local build_run_dir="$1" install_prefix="$2"
+    local build_unified="${build_run_dir}/wine-unified"
+
+    msg2 "make install  (unified wow64 tree)"
+    _install_logged -C "$build_unified"
+    ok "Unified wow64 Wine installed"
+    local build_i386_unix="${build_run_dir}/wine-i386-unix"
+    if [ -d "$build_i386_unix" ] && [ -f "$build_i386_unix/Makefile" ]; then
+        msg2 "Installing i386-unix drivers (unix .so files only)"
+        local i386_unix_dest="${install_prefix}/lib/wine/i386-unix"
+        mkdir -p "$i386_unix_dest"
+        # Install the wine/wine-preloader 32-bit loaders
+        for f in "$build_i386_unix"/loader/wine "$build_i386_unix"/loader/wine-preloader; do
+            [ -f "$f" ] && install -m 755 "$f" "$i386_unix_dest/" && \
+                msg2 "  $(basename "$f")"
+        done
+        # Install the 64-bit compat loader as wine64 in i386-unix (Proton convention)
+        if [ -f "${install_prefix}/lib/wine/x86_64-unix/wine64" ]; then
+            install -m 755 "${install_prefix}/lib/wine/x86_64-unix/wine64" "$i386_unix_dest/"
+            msg2 "  wine64 (from x86_64-unix)"
+        fi
+        if [ -f "${install_prefix}/lib/wine/x86_64-unix/wine64-preloader" ]; then
+            install -m 755 "${install_prefix}/lib/wine/x86_64-unix/wine64-preloader" "$i386_unix_dest/"
+            msg2 "  wine64-preloader (from x86_64-unix)"
+        fi
+        # Install all .so unix drivers
+        local _so_count=0
+        for f in "$build_i386_unix"/dlls/*/*.so; do
+            [ -f "$f" ] || continue
+            install -m 644 "$f" "$i386_unix_dest/"
+            _so_count=$(( _so_count + 1 ))
+        done
+        ok "i386-unix: ${_so_count} .so drivers + loaders installed"
+    fi
+}
+
+_install_wine_classic() {
+    local build_run_dir="$1" install_prefix="$2"
+    local build64="${build_run_dir}/wine64"
+    local build32="${build_run_dir}/wine32"
+
+    msg2 "make install  (64-bit tree — classic multilib)"
+    _install_logged -C "$build64"
+    ok "64-bit Wine installed"
+    if [ "${SKIP_32BIT}" != "true" ]; then
+        [ -f "${build32}/Makefile" ] || err "No classic 32-bit build tree found: ${build32}"
+        msg2 "make install  (32-bit tree)"
+        _install_logged -C "$build32"
+        ok "32-bit Wine installed"
+    fi
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1618,9 +1808,11 @@ _write_build_manifest() {
     local manifest="${DEST_ROOT}/builds.log"
     mkdir -p "${DEST_ROOT}"
     {
-        printf '%-25s  source=%-30s  elapsed=%s  date=%s\n' \
+        printf '%-25s  source=%-30s  profile=%-14s  mode=%-7s  elapsed=%s  date=%s\n' \
             "$(basename "$install_prefix")" \
             "${WINE_SOURCE_KEY}" \
+            "${PROFILE_NAME:--}" \
+            "${NEUTRON_BUILD_MODE:-?}" \
             "$elapsed_fmt" \
             "$(date '+%Y-%m-%d %H:%M:%S')"
     } >> "$manifest"
@@ -1638,6 +1830,9 @@ print_summary() {
     printf "\n"
     printf "  ${C_B}Neutron name :${C_R} %s\n" "$(basename "$install_prefix")"
     printf "  ${C_B}Install path :${C_R} %s\n" "$install_prefix"
+    [ -n "${PROFILE_NAME:-}" ] && \
+        printf "  ${C_B}Profile      :${C_R} %s  (%s pipeline)\n" "$PROFILE_NAME" "${PROFILE_PIPELINE:-?}"
+    printf "  ${C_B}Build mode   :${C_R} %s\n" "${NEUTRON_BUILD_MODE:-?}"
 
     local wine_bin="${install_prefix}/files/bin/wine"
     if [ -x "$wine_bin" ]; then
@@ -1781,6 +1976,9 @@ if [ -n "${_KRON4EK_REDIST_BUILD:-}" ]; then
     exit 0
 fi
 
+# ── Build profile (--profile) ────────────────────────────────────────────────
+[ -z "$PROFILE_NAME" ] || _load_profile "$PROFILE_NAME"
+
 # Validate wine source key if provided
 if [ -n "$WINE_SOURCE_KEY" ]; then
     if [ -z "${WINE_SOURCE_URL[$WINE_SOURCE_KEY]+x}" ]; then
@@ -1796,6 +1994,22 @@ else
      Use: --source proton-wine  or  --source proton-wine-experimental"
     fi
 fi
+
+# ── Build mode ───────────────────────────────────────────────────────────────
+# classic = 64-bit tree (wine64) + 32-bit tree — Mythix Wine's layout
+# wow64   = one unified --enable-archs tree (+ i386-unix drivers) — Neutron line
+if [ -z "$NEUTRON_BUILD_MODE" ]; then
+    case "$WINE_SOURCE_KEY" in
+        mythix-wine) NEUTRON_BUILD_MODE="classic" ;;
+        *)           NEUTRON_BUILD_MODE="wow64" ;;
+    esac
+fi
+case "$NEUTRON_BUILD_MODE" in
+    classic|wow64) ;;
+    *) err "Unknown --build-mode: '${NEUTRON_BUILD_MODE}' (use classic or wow64)" ;;
+esac
+export NEUTRON_BUILD_MODE
+msg2 "Build mode: ${NEUTRON_BUILD_MODE}"
 
 # Validate DXVK key
 if [ -z "${DXVK_SOURCE_URL[$DXVK_SOURCE_KEY]+x}" ]; then
@@ -1987,6 +2201,11 @@ if [ -z "$BUILD_NAME" ]; then
     esac
 fi
 WINE_SOURCE_DIR="${SRC_ROOT}/${WINE_SOURCE_KEY}"
+if [ "${PROFILE_PIPELINE:-}" = "ge" ]; then
+    # GE pipeline layout: <src>/mythix-ge = GE checkout, wine/ + wine-staging/ inside
+    MYTHIX_GE_WORK_DIR="${SRC_ROOT}/mythix-ge"
+    WINE_SOURCE_DIR="${MYTHIX_GE_WORK_DIR}/wine"
+fi
 BUILD_RUN_DIR="${DEST_ROOT}/build-run/${BUILD_NAME}"
 # Neutron's Wine installs to <package>/files/ — not the package root
 NEUTRON_PACKAGE_DIR="${DEST_ROOT}/install/${BUILD_NAME}"
@@ -2005,7 +2224,8 @@ _wine_branch="${WINE_SOURCE_BRANCH[$WINE_SOURCE_KEY]}"
 [ -n "$WINE_SOURCE_BRANCH_ARG" ] && _wine_branch="$WINE_SOURCE_BRANCH_ARG"
 
 # mythix-wine: resolve branch from MYTHIX_WINE_BASE if not set via --branch
-if [ "$WINE_SOURCE_KEY" = "mythix-wine" ] && [ -z "$_wine_branch" ]; then
+if [ "$WINE_SOURCE_KEY" = "mythix-wine" ] && [ -z "$_wine_branch" ] && \
+   [ "${PROFILE_PIPELINE:-}" != "ge" ]; then
     _wine_branch="$MYTHIX_WINE_BASE"
     msg "Mythix Wine base: ${MYTHIX_WINE_BASE}"
 fi
@@ -2048,6 +2268,29 @@ fi
 # ── Fetch Wine source ────────────────────────────────────────────────────────
 section "Fetching Wine source"
 
+if [ "${PROFILE_PIPELINE:-}" = "ge" ]; then
+    # ── Profile (ge pipeline): pinned Valve wine + GE protonprep + profile layers
+    section "Mythix Wine — profile ${PROFILE_NAME} (GE pipeline)"
+    _ge_args=( --profile-dir "$PROFILE_DIR" --work-dir "$MYTHIX_GE_WORK_DIR"
+               --log-dir "$BUILD_RUN_DIR" )
+    [ "$ALLOW_PATCH_FAILURES" = "true" ] && _ge_args+=( --allow-patch-failures )
+    if [ "$DRY_RUN" -eq 1 ]; then
+        dim "  [dry-run] bash $(basename "$GE_PIPELINE") ${_ge_args[*]}"
+    else
+        set +e
+        bash "$GE_PIPELINE" "${_ge_args[@]}"
+        _ge_rc=$?
+        set -e
+        case "$_ge_rc" in
+            0) ok "Profile source ready: ${WINE_SOURCE_DIR}" ;;
+            2) err "Profile ${PROFILE_NAME}: a patch layer failed to apply (exit 2).
+     Logs: ${BUILD_RUN_DIR}/mythix-ge-wine-section.log
+     Re-curate the profile patches (see profiles/README.md), or build anyway
+     with --allow-patch-failures while you work on it." ;;
+            *) err "Profile ${PROFILE_NAME}: source preparation failed (exit ${_ge_rc})." ;;
+        esac
+    fi
+else
 # Clone strategy: Valve's fork needs full history for git describe;
 # WineHQ sources can use shallow clones for speed.
 case "$WINE_SOURCE_KEY" in
@@ -2065,6 +2308,7 @@ fetch_source \
     "$_wine_branch" \
     "$WINE_SOURCE_DIR" \
     "$_shallow"
+fi
 
 [ -d "$WINE_SOURCE_DIR" ] || \
     err "Wine source directory not found after fetch: $WINE_SOURCE_DIR"
@@ -2079,7 +2323,9 @@ fetch_source \
 # Layer 3: Wine-Staging patches
 # Layer 4: GE-Proton gaming patches
 # Layer 5: Our own Mythix custom patches
-if [ "$WINE_SOURCE_KEY" = "mythix-wine" ]; then
+# Profiles with PROFILE_PIPELINE=legacy inject their pins into this pipeline
+# (PIN_* hooks below); the ge pipeline has already prepared its tree.
+if [ "$WINE_SOURCE_KEY" = "mythix-wine" ] && [ "${PROFILE_PIPELINE:-legacy}" = "legacy" ]; then
 
     # ── Wine base selection ──────────────────────────────────────────────
     # MYTHIX_WINE_BASE controls which Valve branch we build from:
@@ -2099,9 +2345,17 @@ if [ "$WINE_SOURCE_KEY" = "mythix-wine" ]; then
             _tkg_pin_label="latest"
             ;;
         *)
-            die "Unknown MYTHIX_WINE_BASE: ${MYTHIX_WINE_BASE} (use proton_10.0 or bleeding-edge)"
+            err "Unknown MYTHIX_WINE_BASE: ${MYTHIX_WINE_BASE} (use proton_10.0 or bleeding-edge)"
             ;;
     esac
+
+    # ── Profile pins (legacy profiles: mythix-10.17, mythix-11.11, …) ────
+    # Every upstream input of a profile build is pinned; failures to reach a
+    # pin are fatal instead of silently building from whatever is checked out.
+    if [ -n "$PROFILE_NAME" ] && [ -n "${PIN_TKG_COMMIT:-}" ]; then
+        _tkg_pin_commit="$PIN_TKG_COMMIT"
+        _tkg_pin_label="profile ${PROFILE_NAME}"
+    fi
 
     section "Mythix Wine — ${_mythix_base_label} + TkG + Staging + GE"
     msg "Base: ${_mythix_base_label}"
@@ -2109,12 +2363,22 @@ if [ "$WINE_SOURCE_KEY" = "mythix-wine" ]; then
 
     # Pin to a known-good commit on the selected branch (empty = use latest)
     BLEEDING_EDGE_PIN=""
+    [ -n "$PROFILE_NAME" ] && BLEEDING_EDGE_PIN="${PIN_WINE_COMMIT:-}"
 
     BLEEDING_EDGE_REVERTS=()
     BLEEDING_EDGE_CHERRIES=()
 
     # Fetch the target branch if not already available
     (cd "$WINE_SOURCE_DIR" && git fetch origin "$_mythix_base_branch" 2>/dev/null) || true
+
+    # A pinned commit may no longer be on any branch (Valve rewrites
+    # bleeding-edge) — fetch it by hash.
+    if [[ -n "$BLEEDING_EDGE_PIN" ]] && \
+       ! git -C "$WINE_SOURCE_DIR" cat-file -e "${BLEEDING_EDGE_PIN}^{commit}" 2>/dev/null; then
+        msg "Fetching pinned wine commit ${BLEEDING_EDGE_PIN:0:12} by hash…"
+        git -C "$WINE_SOURCE_DIR" fetch -q "${PIN_WINE_REPO:-origin}" "$BLEEDING_EDGE_PIN" || \
+            err "Could not fetch pinned wine commit ${BLEEDING_EDGE_PIN} from ${PIN_WINE_REPO:-origin}"
+    fi
 
     # Hard reset to clean base before applying patches
     if [[ -n "$BLEEDING_EDGE_PIN" ]]; then
@@ -2125,6 +2389,14 @@ if [ "$WINE_SOURCE_KEY" = "mythix-wine" ]; then
         (cd "$WINE_SOURCE_DIR" && git reset --hard "origin/${_mythix_base_branch}") 2>/dev/null || true
     fi
     (cd "$WINE_SOURCE_DIR" && git clean -fdx -- '*.rej' '*.orig' 'autom4te.cache') 2>/dev/null || true
+    if [ -n "$PROFILE_NAME" ]; then
+        if [[ -n "$BLEEDING_EDGE_PIN" ]] && [ "$(git -C "$WINE_SOURCE_DIR" rev-parse HEAD)" != \
+             "$(git -C "$WINE_SOURCE_DIR" rev-parse "${BLEEDING_EDGE_PIN}^{commit}" 2>/dev/null)" ]; then
+            err "Wine tree is not at the profile pin ${BLEEDING_EDGE_PIN} after reset"
+        fi
+        # Pinned builds start from a pristine tree, independent of earlier runs
+        git -C "$WINE_SOURCE_DIR" clean -fdxq
+    fi
     # Tag the clean base state so fixups can reliably revert files later
     (cd "$WINE_SOURCE_DIR" && git tag -f mythix-base-clean) 2>/dev/null || true
     # Also stash copies of files that staging frequently breaks (git show fails on shallow clones)
@@ -2234,7 +2506,16 @@ if [ "$WINE_SOURCE_KEY" = "mythix-wine" ]; then
     # Pin TkG to a specific commit if the base branch requires it
     if [[ -n "$_tkg_pin_commit" ]]; then
         msg "Pinning TkG reference to ${_tkg_pin_label} (${_tkg_pin_commit:0:12})…"
+        if [ -n "$PROFILE_NAME" ] && \
+           ! git -C "$_tkg_dir" cat-file -e "${_tkg_pin_commit}^{commit}" 2>/dev/null; then
+            git -C "$_tkg_dir" fetch -q origin "$_tkg_pin_commit" || \
+                err "Could not fetch pinned TkG commit ${_tkg_pin_commit}"
+        fi
         (cd "$_tkg_dir" && git reset --hard "$_tkg_pin_commit") 2>/dev/null || true
+        if [ -n "$PROFILE_NAME" ] && [ "$(git -C "$_tkg_dir" rev-parse HEAD)" != \
+             "$(git -C "$_tkg_dir" rev-parse "${_tkg_pin_commit}^{commit}" 2>/dev/null)" ]; then
+            err "TkG reference is not at the profile pin ${_tkg_pin_commit}"
+        fi
         ok "TkG pinned to ${_tkg_pin_label}"
     fi
 
@@ -2350,6 +2631,14 @@ if [ "$WINE_SOURCE_KEY" = "mythix-wine" ]; then
             warn "No v10.x staging tag found — using latest"
         fi
     fi
+    if [ -n "$PROFILE_NAME" ] && [ -n "${PIN_STAGING_REF:-}" ]; then
+        if ! git -C "$_staging_dir" checkout -q -f "$PIN_STAGING_REF" 2>/dev/null; then
+            git -C "$_staging_dir" fetch -q origin "$PIN_STAGING_REF" && \
+                git -C "$_staging_dir" checkout -q -f FETCH_HEAD || \
+                err "Could not check out pinned wine-staging ref ${PIN_STAGING_REF}"
+        fi
+        ok "Staging pinned to ${PIN_STAGING_REF} (profile ${PROFILE_NAME})"
+    fi
 
     _staging_script="${_staging_dir}/staging/patchinstall.py"
     if [ ! -f "$_staging_script" ]; then
@@ -2400,7 +2689,22 @@ if [ "$WINE_SOURCE_KEY" = "mythix-wine" ]; then
 
     GE_CACHE_DIR="${SRC_ROOT}/proton-ge-custom"
 
-    if [ ! -d "${GE_CACHE_DIR}/.git" ]; then
+    if [ -n "$PROFILE_NAME" ] && [ -n "${PIN_GE_COMMIT:-}" ]; then
+        # Pinned GE lives in its own checkout so unpinned builds keep tracking master
+        GE_CACHE_DIR="${SRC_ROOT}/proton-ge-custom-pinned"
+        if [ ! -d "${GE_CACHE_DIR}/.git" ]; then
+            git init -q "$GE_CACHE_DIR"
+            git -C "$GE_CACHE_DIR" remote add origin "${PIN_GE_REPO:-$GE_PROTON_REPO}"
+        fi
+        if ! git -C "$GE_CACHE_DIR" cat-file -e "${PIN_GE_COMMIT}^{commit}" 2>/dev/null; then
+            msg "Fetching pinned proton-ge-custom ${PIN_GE_COMMIT:0:12}…"
+            git -C "$GE_CACHE_DIR" fetch -q --depth=1 origin "$PIN_GE_COMMIT" || \
+                err "Could not fetch pinned GE commit ${PIN_GE_COMMIT}"
+        fi
+        git -C "$GE_CACHE_DIR" -c advice.detachedHead=false checkout -q -f "$PIN_GE_COMMIT"
+        git -C "$GE_CACHE_DIR" clean -fdxq
+        ok "GE pinned to ${PIN_GE_COMMIT:0:12} (profile ${PROFILE_NAME})"
+    elif [ ! -d "${GE_CACHE_DIR}/.git" ]; then
         msg "Cloning proton-ge-custom…"
         run git clone --depth=1 "$GE_PROTON_REPO" "$GE_CACHE_DIR"
     else
@@ -4321,6 +4625,26 @@ AFUNIX_EOF
     msg "Layer 4: GE-Proton gaming patches"
     msg "Layer 5: Mythix custom patches (from patches/mythix-wine/)"
     msg2 "Full patch log: ${_mythix_patch_log}"
+
+    # ── Source lock (profile builds) ──────────────────────────────────────
+    if [ -n "$PROFILE_NAME" ]; then
+        _lock="${BUILD_RUN_DIR}/mythix-source.lock"
+        {
+            printf '# Mythix source lock — written by neutron-builder.sh (legacy pipeline)\n'
+            printf 'profile=%s\n' "$PROFILE_NAME"
+            printf 'pipeline=legacy\n'
+            printf 'wine_base=%s\n' "$MYTHIX_WINE_BASE"
+            printf 'wine_repo=%s\n' "${PIN_WINE_REPO:-${WINE_SOURCE_URL[mythix-wine]}}"
+            printf 'wine_commit=%s\n' "$(git -C "$WINE_SOURCE_DIR" rev-parse mythix-base-clean 2>/dev/null)"
+            printf 'tkg_repo=%s\n' "$KRON4EK_TKG_REPO"
+            printf 'tkg_commit=%s\n' "$(git -C "$_tkg_dir" rev-parse HEAD 2>/dev/null)"
+            printf 'staging_commit=%s\n' "$(git -C "$_staging_dir" rev-parse HEAD 2>/dev/null)"
+            printf 'ge_repo=%s\n' "${PIN_GE_REPO:-$GE_PROTON_REPO}"
+            printf 'ge_commit=%s\n' "$(git -C "$GE_CACHE_DIR" rev-parse HEAD 2>/dev/null)"
+            printf 'created=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        } > "$_lock"
+        ok "Source lock: ${_lock}"
+    fi
     ok "Mythix Wine — the works"
 fi
 
@@ -4468,7 +4792,7 @@ if [ "$WINE_SOURCE_KEY" = "ge-proton" ]; then
 fi
 
 # ── Apply neutron patch groups ────────────────────────────────────────────────
-if [ -x "$PATCHER" ] && [ -d "$PATCHES_DIR" ]; then
+if [ -f "$PATCHER" ] && [ -d "$PATCHES_DIR" ]; then
     section "Neutron patch system"
     export WINE_SOURCE_KEY PATCH_LOG="${BUILD_RUN_DIR}/neutron-patch.log" DRY_RUN
     mkdir -p "$BUILD_RUN_DIR"
@@ -4480,12 +4804,27 @@ if [ -x "$PATCHER" ] && [ -d "$PATCHES_DIR" ]; then
         _patch_args=("${_pg_list[@]}")
     fi
 
-    "$PATCHER" "$WINE_SOURCE_DIR" "$PATCHES_DIR" "${_patch_args[@]}" || {
+    # Profile builds are strict: a patch group the profile asks for must apply.
+    if [ -n "$PROFILE_NAME" ] && [ "$ALLOW_PATCH_FAILURES" != "true" ]; then
+        export NEUTRON_PATCH_STRICT=1
+    fi
+    # Record what was applied (appended to the source lock for profile builds)
+    export NEUTRON_PATCH_MANIFEST="${BUILD_RUN_DIR}/neutron-patch.manifest"
+    : > "$NEUTRON_PATCH_MANIFEST"
+    bash "$PATCHER" "$WINE_SOURCE_DIR" "$PATCHES_DIR" "${_patch_args[@]+"${_patch_args[@]}"}" || {
+        if [ "${NEUTRON_PATCH_STRICT:-0}" = "1" ]; then
+            err "Patch group(s) failed for profile ${PROFILE_NAME} — check ${BUILD_RUN_DIR}/neutron-patch.log
+     (--allow-patch-failures builds anyway)"
+        fi
         warn "Some patches may have failed — check ${BUILD_RUN_DIR}/neutron-patch.log"
     }
-elif [ -d "$PATCHES_DIR" ] && [ ! -x "$PATCHER" ]; then
-    warn "neutron-patcher.sh not found or not executable: $PATCHER"
+elif [ -d "$PATCHES_DIR" ]; then
+    warn "neutron-patcher.sh not found: $PATCHER"
     warn "Skipping patch application"
+fi
+if [ -n "$PROFILE_NAME" ] && [ -f "${BUILD_RUN_DIR}/mythix-source.lock" ] && \
+   [ -s "${NEUTRON_PATCH_MANIFEST:-/nonexistent}" ]; then
+    sed 's/^/patch_group_/' "$NEUTRON_PATCH_MANIFEST" >> "${BUILD_RUN_DIR}/mythix-source.lock"
 fi
 
 # ── Apply wine-staging patches (staging source only) ─────────────────────────
@@ -4734,6 +5073,42 @@ else
     export CUSTOM_CFG
     export RESUME
     export BUILD_LOG
+    export NEUTRON_BUILD_MODE
+
+    # ── FFmpeg for winedmo (profiles with PROFILE_FFMPEG=static) ────────────
+    # GE's media rework removes winegstreamer: video/audio decoding goes
+    # through winedmo + FFmpeg (GE ships its own FFmpeg build). We build GE's
+    # pinned FFmpeg and link it statically into winedmo.so, so the package
+    # never depends on the host's libavcodec soname.
+    unset NEUTRON_FFMPEG_PREFIX_64 NEUTRON_FFMPEG_PREFIX_32
+    if [ -n "$PROFILE_NAME" ] && [ "${PROFILE_FFMPEG:-none}" = "static" ]; then
+        section "FFmpeg (static, for winedmo)"
+        _ff_commit="${PIN_FFMPEG_COMMIT:-}"
+        [ -n "$_ff_commit" ] || _ff_commit="$(sed -n 's/^ffmpeg_commit=//p' \
+            "${BUILD_RUN_DIR}/mythix-source.lock" 2>/dev/null || true)"
+        [ -n "$_ff_commit" ] || \
+            err "Profile ${PROFILE_NAME}: no FFmpeg pin (PIN_FFMPEG_COMMIT, or ffmpeg_commit in the source lock)"
+        _ff_archs="x86_64"
+        [ "$SKIP_32BIT" = "true" ] || _ff_archs="x86_64,i386"
+        [ "$DRY_RUN" -eq 1 ] && \
+            dim "  [dry-run] bash $(basename "$FFMPEG_BUILDER") --commit ${_ff_commit} --archs ${_ff_archs}"
+        [ "$DRY_RUN" -eq 1 ] || bash "$FFMPEG_BUILDER" \
+            --repo "${PIN_FFMPEG_REPO:-https://github.com/FFmpeg/FFmpeg.git}" \
+            --commit "$_ff_commit" \
+            --src-dir "${SRC_ROOT}/ffmpeg" \
+            --build-dir "${BUILD_RUN_DIR}/ffmpeg" \
+            --archs "$_ff_archs" \
+            --jobs "$JOBS" || err "FFmpeg build failed — logs in ${BUILD_RUN_DIR}/ffmpeg/"
+        export NEUTRON_FFMPEG_PREFIX_64="${BUILD_RUN_DIR}/ffmpeg/x86_64/prefix"
+        if [ -d "${BUILD_RUN_DIR}/ffmpeg/i386/prefix" ]; then
+            export NEUTRON_FFMPEG_PREFIX_32="${BUILD_RUN_DIR}/ffmpeg/i386/prefix"
+        fi
+        if [ -f "${BUILD_RUN_DIR}/mythix-source.lock" ] && \
+           ! grep -q '^ffmpeg_build=' "${BUILD_RUN_DIR}/mythix-source.lock"; then
+            printf 'ffmpeg_build=static %s (%s)\n' "$_ff_commit" "$_ff_archs" \
+                >> "${BUILD_RUN_DIR}/mythix-source.lock"
+        fi
+    fi
 
     # ── Compile ─────────────────────────────────────────────────────────────
     section "Compiling proton-wine"
@@ -4743,6 +5118,17 @@ else
     "$BUILD_CORE"
 
     # ── Install ─────────────────────────────────────────────────────────────
+    # Profile builds install into an empty files/ so nothing from an earlier
+    # build (other mode, older pins) lingers in the package.
+    if [ -n "$PROFILE_NAME" ]; then
+        case "$WINE_INSTALL_PREFIX" in
+            "${DEST_ROOT}/install/"?*/files)
+                msg2 "Profile build: clearing ${WINE_INSTALL_PREFIX} before install"
+                rm -rf "$WINE_INSTALL_PREFIX"
+                mkdir -p "$WINE_INSTALL_PREFIX"
+                ;;
+        esac
+    fi
     install_wine "$BUILD_RUN_DIR" "$WINE_INSTALL_PREFIX"
 
 fi
@@ -4849,14 +5235,30 @@ section "Packaging Neutron"
 export NEUTRON_PACKAGE_DIR WINE_INSTALL_PREFIX
 export DXVK_SOURCE_KEY VKD3D_SOURCE_KEY
 export BUILD_NAME SNIPER_MODE
+export NEUTRON_SOURCE_KEY="$WINE_SOURCE_KEY" NEUTRON_BUILD_MODE
+export NEUTRON_PROFILE="${PROFILE_NAME:-}"
+export NEUTRON_PROFILE_WAYLAND="${PROFILE_WAYLAND:-}"
+export NEUTRON_SOURCE_LOCK=""
+if [ -n "$PROFILE_NAME" ]; then
+    [ -f "${BUILD_RUN_DIR}/mythix-source.lock" ] && \
+        NEUTRON_SOURCE_LOCK="${BUILD_RUN_DIR}/mythix-source.lock"
+    # The profile's package name is the version tag the launcher reads
+    # (prefix schema + build-profile selection), e.g. Mythix-Neutron-11.19-1.
+    if [[ "$BUILD_NAME" =~ -[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+        export NEUTRON_VERSION_STR="$BUILD_NAME"
+    else
+        export NEUTRON_VERSION_STR="${BUILD_NAME}-${PROFILE_VERSION_LABEL:-0.0}"
+    fi
+fi
 "$PACKAGER"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Version rename  — append actual wine version string to the package dir
 #  Final name: <BUILD_NAME>-<version>  e.g. mythix-neutron-11.4.r0.gabcdef
+#  Profile builds keep the profile's fixed package name.
 # ══════════════════════════════════════════════════════════════════════════════
 _wine_bin="${WINE_INSTALL_PREFIX}/bin/wine"
-if [ -x "$_wine_bin" ]; then
+if [ -z "$PROFILE_NAME" ] && [ -x "$_wine_bin" ]; then
     _raw_ver="$("$_wine_bin" --version 2>/dev/null || true)"
     if [ -n "$_raw_ver" ]; then
         # Strip leading "wine-" prefix — user just wants the number

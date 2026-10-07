@@ -484,7 +484,10 @@ ok "neutron launcher installed ($(wc -l < "$_launcher_src") lines)"
 #  as the prefix schema version via load_prefix_version().
 # ══════════════════════════════════════════════════════════════════════════════
 _version_str="${BUILD_NAME}"
-if [ -n "$_wine_ver" ] && [ "$_wine_ver" != "unknown" ]; then
+if [ -n "${NEUTRON_VERSION_STR:-}" ]; then
+    # Profile builds: the profile's package name is the version tag
+    _version_str="$NEUTRON_VERSION_STR"
+elif [ -n "$_wine_ver" ] && [ "$_wine_ver" != "unknown" ]; then
     # Strip "wine-" prefix and anything after the version number
     # e.g. "wine-11.16 (Staging)" -> "11.16", "wine-10.17.r0.gabcdef" -> "10.17"
     _clean_ver="$(printf '%s' "${_wine_ver#wine-}" | sed 's/[[:space:]].*//' | grep -oP '^\d+\.\d+')"
@@ -492,6 +495,30 @@ if [ -n "$_wine_ver" ] && [ "$_wine_ver" != "unknown" ]; then
 fi
 printf '%s %s\n' "$(date +%s)" "$_version_str" > "${NEUTRON_PACKAGE_DIR}/version"
 ok "version file written: $_version_str"
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  build-info — facts about this build for the neutron launcher (KEY=VALUE)
+#  WAYLAND=1 makes the launcher default to the native Wayland driver when a
+#  Wayland session is detected (NEUTRON_WAYLAND=0/1 overrides at launch).
+# ══════════════════════════════════════════════════════════════════════════════
+{
+    printf '# Written by neutron-package.sh — read by the neutron launcher\n'
+    printf 'BUILD_NAME=%s\n' "$BUILD_NAME"
+    printf 'VERSION=%s\n' "$_version_str"
+    printf 'WINE_VERSION=%s\n' "$_wine_ver"
+    printf 'SOURCE=%s\n' "${NEUTRON_SOURCE_KEY:-}"
+    printf 'PROFILE=%s\n' "${NEUTRON_PROFILE:-}"
+    printf 'BUILD_MODE=%s\n' "${NEUTRON_BUILD_MODE:-}"
+    [ -n "${NEUTRON_PROFILE_WAYLAND:-}" ] && printf 'WAYLAND=%s\n' "$NEUTRON_PROFILE_WAYLAND"
+    printf 'BUILT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "${NEUTRON_PACKAGE_DIR}/build-info"
+ok "build-info written"
+
+# Source lock of a profile build: exactly which upstream commits went in
+if [ -n "${NEUTRON_SOURCE_LOCK:-}" ] && [ -f "$NEUTRON_SOURCE_LOCK" ]; then
+    cp -f "$NEUTRON_SOURCE_LOCK" "${NEUTRON_PACKAGE_DIR}/mythix-source.lock"
+    ok "mythix-source.lock copied into the package"
+fi
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Write a minimal README inside the package
@@ -543,7 +570,9 @@ _verify "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf"       "toolmanifest.vdf"
 _verify "${NEUTRON_PACKAGE_DIR}/neutron"                "neutron launcher"
 _verify "${WINE_INSTALL_PREFIX}/bin/wine"              "files/bin/wine"
 _verify "${WINE_INSTALL_PREFIX}/bin/wineserver"        "files/bin/wineserver"
-_verify "${WINE_INSTALL_PREFIX}/bin/wine64"            "files/bin/wine64"
+if [ "${NEUTRON_BUILD_MODE:-classic}" = "classic" ]; then
+    _verify "${WINE_INSTALL_PREFIX}/bin/wine64"        "files/bin/wine64"
+fi
 
 # ── Package size ──────────────────────────────────────────────────────────────
 _pkg_size="$(du -sh "$NEUTRON_PACKAGE_DIR" 2>/dev/null | cut -f1)"

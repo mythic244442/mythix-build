@@ -1,0 +1,501 @@
+Mythix curated TkG layer for the mythix-11.19 profile
+=====================================================
+
+Source  : Kron4ek/wine-tkg tag 11.19 (b471df7dc4f2), minus vanilla wine-11.19 + wine-staging v11.19 (766285c4)
+Target  : Valve wine 1c78596625336a73dbfc035dbbcf0dbdd95b06eb + GE a3f58c5 protonprep (staging v11.0)
+Applies : cleanly on top of the GE layer (git apply), no fuzz
+
+Kept (TkG-only behaviour not already in Valve/GE):
+  * programs/explorer/desktop.c   — Wayland-first default driver ("mac,wayland,x11")
+  * loader/wine.inf.in            — [CustomOverrides]: ddraw/winhttp/winmm/version native-first
+  * dlls/ntdll/unix/debug.c       — WINEDEBUG defaults to -all when unset
+  * dlls/user32/Makefile.in       — user32 at the Windows image base on i386
+  * dlls/kernelbase/loader.c      — MUI resource lookup for localized resources
+  * dlls/win32k.sys/win32k.sys.spec — real forwards instead of stubs on 64-bit
+  * programs/winecfg/*            — TkG Staging tab (CSMT toggle semantics)
+Mythix:
+  * dlls/ntdll/loader.c           — Mythix testing-build banner instead of the stock staging one
+
+Dropped on purpose (already in Valve/GE, or conflicts with them):
+  * wine64 loader naming (configure.ac, loader/Makefile.in, ntdll/unix/loader.c) — Valve uses loader64/;
+    applying TkG's on top is what caused the old "duplicate wine64 install" fix 26
+  * LAA override + wine_nt_to_unix_file_name syscall exports (ntdll.spec, ntsyscalls.h, wow64, virtual.c)
+    — Valve has its own WINE_LARGE_ADDRESS_AWARE path and wine_nt_to_unix_file_name
+  * EAC/BattlEye bits (kernelbase, loadorder, sechost, belauncher, wineboot) — already in Valve
+  * winebus DisableHidraw/DisableInput default-on — would disable hidraw (DualSense/DS4 haptics, Mythix DS4 work)
+  * dcomp/dxgi composition reverts — Kron4ek staging exclusions, not TkG features
+  * NTSync banner — Valve already prints "ntsync: up and running."
+  * wine/heap.h compat header and its users; TkG's hardcoded version string (Mythix brands its own)
+
+diff --git a/dlls/kernelbase/loader.c b/dlls/kernelbase/loader.c
+index fc93eda8..24a4991e 100644
+--- a/dlls/kernelbase/loader.c
++++ b/dlls/kernelbase/loader.c
+@@ -20,6 +20,28 @@
+  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
+  */
+ 
++/*******************************************************************************/
++/* Modification and Enhancement Narrative                                      */
++/*                                                                             */
++/* Craig Schulstad - Horace, ND  USA (8 August, 2026)                          */
++/*                                                                             */
++/* This program has been revised to reactively acquire an MUI file reference   */
++/* to be used by the various resource fetch functions.  Without these code     */
++/* changes, no MUI reference was found and the calling program was falling     */
++/* back to the "exe" file for information.                                     */
++/*                                                                             */
++/* Version being enhanced:  11.15                                              */
++/*                                                                             */
++/* The following function calls were added:                                    */
++/*   get_mui (Attempts to locate and retrieve an MUI file)                     */
++/*   get_res_handle (Relocation of the resource loader function call)          */
++/*                                                                             */
++/* The following function(s) were modified:                                    */
++/*   FindResourceExW (Split out resource loader function)                      */
++/*   LoadResource    (Perform conditioned get_mui call)                        */
++/*                                                                             */
++/*******************************************************************************/
++
+ #include <stdarg.h>
+ 
+ #include "ntstatus.h"
+@@ -34,6 +56,9 @@
+ #include "wine/asm.h"
+ #include "wine/debug.h"
+ #include "wine/exception.h"
++/* MUI Start */
++#include "winreg.h"
++/* MUI End   */
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(module);
+ 
+@@ -56,6 +81,11 @@ static CRITICAL_SECTION_DEBUG critsect_debug =
+ };
+ static CRITICAL_SECTION exclusive_datafile_list_section = { &critsect_debug, -1, 0, 0, 0, 0 };
+ 
++/* MUI Start */
++static HMODULE module_mui = NULL;
++static WCHAR mui_locale[LOCALE_NAME_MAX_LENGTH] = {L'\0'};
++/* MUI End   */
++
+ /***********************************************************************
+  * Modules
+  ***********************************************************************/
+@@ -1113,11 +1143,74 @@ BOOL WINAPI DECLSPEC_HOTPATCH EnumResourceTypesExW( HMODULE module, ENUMRESTYPEP
+     return ret;
+ }
+ 
++/* MUI Start */
++/***********************************************************************/
++/* get_mui - Acquire an MUI module for the associated resource         */
++/***********************************************************************/
++
++HMODULE get_mui(HMODULE module)
++{
++    WCHAR module_name[MAX_PATH], mui_name[MAX_PATH], * last_slash;
++    HMODULE mui_module = NULL;
++    HKEY intl_key;
++    DWORD count = LOCALE_NAME_MAX_LENGTH;
++    LONG save_error = GetLastError();
++
++    if (!(GetModuleFileNameW(module, module_name, MAX_PATH))) {
++        TRACE ("Module file name was not found - returning with source module\n");
++        SetLastError(save_error);
++        return module;
++    }
++
++    if (!(wcsstr(module_name, L".exe")) && !(wcsstr(module_name, L".EXE"))) return module;
++
++    if (wcslen(mui_locale) == 0) {
++        RegCreateKeyExW( HKEY_CURRENT_USER, L"Control Panel\\International",
++                     0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &intl_key, NULL );
++        RegQueryValueExW( intl_key, L"LocaleName", NULL, NULL, (BYTE *)mui_locale, &count );
++        TRACE("Locale name: %s\n", debugstr_w(mui_locale));
++    }
++	
++    SetLastError(save_error);
++
++    last_slash = wcsrchr(module_name, L'\\');
++
++    wcscpy(mui_name, module_name);
++
++    mui_name[last_slash - module_name + 1] = L'\0';
++
++    wcscat(mui_name, mui_locale);
++
++    wcscat(mui_name, last_slash);
++
++    if (wcsstr(module_name, L".exe")) {
++        wcscat(mui_name, L".mui");
++    } else {
++        wcscat(mui_name, L".MUI");
++    }
++	
++    TRACE("Language path: %s\n", debugstr_w(mui_name));
++
++    mui_module = LoadLibraryExW(mui_name, 0, 0);
++	
++    SetLastError(save_error);
++	
++    if (mui_module != NULL) {
++        module_mui = mui_module;
++        return mui_module;
++    } else {
++        module_mui = NULL;
++        return module;
++    }
++
++}
++
++/***********************************************************************/
++/* get_res_handle - Isolated call of the LdrFindResource function      */
++/***********************************************************************/
++
++HRSRC get_res_handle(HMODULE module, LPCWSTR type, LPCWSTR name, WORD lang)
+ 
+-/**********************************************************************
+- *	    FindResourceExW  (kernelbase.@)
+- */
+-HRSRC WINAPI DECLSPEC_HOTPATCH FindResourceExW( HMODULE module, LPCWSTR type, LPCWSTR name, WORD lang )
+ {
+     NTSTATUS status;
+     UNICODE_STRING nameW, typeW;
+@@ -1126,7 +1219,6 @@ HRSRC WINAPI DECLSPEC_HOTPATCH FindResourceExW( HMODULE module, LPCWSTR type, LP
+ 
+     TRACE( "%p %s %s %04x\n", module, debugstr_w(type), debugstr_w(name), lang );
+ 
+-    if (!module) module = GetModuleHandleW( 0 );
+     nameW.Buffer = typeW.Buffer = NULL;
+ 
+     __TRY
+@@ -1135,10 +1227,11 @@ HRSRC WINAPI DECLSPEC_HOTPATCH FindResourceExW( HMODULE module, LPCWSTR type, LP
+         if ((status = get_res_nameW( type, &typeW )) != STATUS_SUCCESS) goto done;
+         info.Type = (ULONG_PTR)typeW.Buffer;
+         info.Name = (ULONG_PTR)nameW.Buffer;
+-        info.Language = lang;
++        info.Language = lang; 
+         status = LdrFindResource_U( module, &info, 3, &entry );
+     done:
+-        if (status != STATUS_SUCCESS) SetLastError( RtlNtStatusToDosError(status) );
++        if (status != STATUS_SUCCESS)
++            SetLastError( RtlNtStatusToDosError(status) );
+     }
+     __EXCEPT_PAGE_FAULT
+     {
+@@ -1148,10 +1241,49 @@ HRSRC WINAPI DECLSPEC_HOTPATCH FindResourceExW( HMODULE module, LPCWSTR type, LP
+ 
+     if (!IS_INTRESOURCE(nameW.Buffer)) HeapFree( GetProcessHeap(), 0, nameW.Buffer );
+     if (!IS_INTRESOURCE(typeW.Buffer)) HeapFree( GetProcessHeap(), 0, typeW.Buffer );
++
+     return (HRSRC)entry;
+ }
+ 
+ 
++/**********************************************************************
++ *	    FindResourceExW  (kernelbase.@)
++ */
++HRSRC WINAPI DECLSPEC_HOTPATCH FindResourceExW( HMODULE module, LPCWSTR type, LPCWSTR name, WORD lang )
++{
++
++    HRSRC rsrc;
++    HMODULE work_module = NULL, test_module = NULL;
++
++    if (!module) module = GetModuleHandleW( 0 );
++
++    work_module = GetModuleHandleW( 0 );
++	
++    if (module != work_module) {
++        rsrc = get_res_handle(module, type, name, lang);
++        module_mui = NULL;
++    } else {
++        test_module = get_mui(module);
++        if (test_module == module) {
++            rsrc = get_res_handle(module, type, name, lang);
++            module_mui = NULL;
++        } else {
++            rsrc = get_res_handle(test_module, type, name, lang);
++			
++            if (!rsrc) {
++                TRACE("Fallback from MUI to base module: %p %p %s %s\n", test_module, module, debugstr_w(type), debugstr_w(name));
++                rsrc = get_res_handle(module, type, name, lang);
++                module_mui = NULL;
++            }
++        }
++    }
++
++    return rsrc;
++
++}
++/* MUI End   */
++
++
+ /**********************************************************************
+  *	    FindResourceW    (kernelbase.@)
+  */
+@@ -1169,22 +1301,37 @@ BOOL WINAPI DECLSPEC_HOTPATCH FreeResource( HGLOBAL handle )
+     return FALSE;
+ }
+ 
+-
++/* MUI Start */
+ /**********************************************************************
+  *	    LoadResource     (kernelbase.@)
+  */
+ HGLOBAL WINAPI DECLSPEC_HOTPATCH LoadResource( HINSTANCE module, HRSRC rsrc )
+ {
+     void *ret;
+-
+-    TRACE( "%p %p\n", module, rsrc );
++    HMODULE work_module = NULL;
+ 
+     if (!rsrc) return 0;
+     if (!module) module = GetModuleHandleW( 0 );
+-    if (!set_ntstatus( LdrAccessResource( module, (IMAGE_RESOURCE_DATA_ENTRY *)rsrc, &ret, NULL )))
++    work_module = module;
++
++    /* Check for and use a MUI module  	*/
++	
++    if (module_mui != NULL)	{
++        if (((HMODULE)rsrc < module) || ((module_mui > module) && ((HMODULE)rsrc > module_mui))) 
++        work_module = module_mui;
++    }
++
++    /* Ready this handle for next resource retrieval  */
++	
++    module_mui= NULL;				
++	
++    if (!set_ntstatus( LdrAccessResource( work_module, (IMAGE_RESOURCE_DATA_ENTRY *)rsrc, &ret, NULL ))) 
+         return 0;
++	
+     return ret;
++
+ }
++/* MUI End   */
+ 
+ 
+ /**********************************************************************
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index b63302a4..43117e35 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -5132,12 +5132,12 @@ void loader_init( CONTEXT *context, void **entry )
+     InitializeObjectAttributes( &staging_event_attr, &staging_event_string, OBJ_OPENIF, NULL, NULL );
+     if (NtCreateEvent( &staging_event, EVENT_ALL_ACCESS, &staging_event_attr, NotificationEvent, FALSE ) == STATUS_SUCCESS)
+     {
+-        FIXME_(winediag)("wine-staging %s is a testing version containing experimental patches.\n", wine_get_version());
+-        FIXME_(winediag)("Please mention your exact version when filing bug reports on winehq.org.\n");
++        FIXME_(winediag)("Mythix Wine %s is a testing build (Valve bleeding-edge + GE + TkG + Mythix patches).\n", wine_get_version());
++        FIXME_(winediag)("Please report issues to https://github.com/mythic244442/mythix-build/issues, not to winehq.org, Valve, GE or TkG.\n");
+     }
+     else
+     {
+-        WARN_(winediag)("wine-staging %s is a testing version containing experimental patches.\n", wine_get_version());
++        WARN_(winediag)("Mythix Wine %s is a testing build (Valve bleeding-edge + GE + TkG + Mythix patches).\n", wine_get_version());
+         NtClose( staging_event );
+     }
+ 
+diff --git a/dlls/ntdll/unix/debug.c b/dlls/ntdll/unix/debug.c
+index 992e7c4a..9af22e7d 100644
+--- a/dlls/ntdll/unix/debug.c
++++ b/dlls/ntdll/unix/debug.c
+@@ -203,6 +203,7 @@ static void debug_usage(void)
+ /* initialize all options at startup */
+ static void init_options(void)
+ {
++    static char default_debug[] = "-all";  /* TkG: quiet by default when WINEDEBUG is unset */
+     char *wine_debug = getenv("WINEDEBUG");
+     const char *app_name, *p;
+     struct stat st1, st2;
+@@ -217,7 +218,7 @@ static void init_options(void)
+         default_flags = 0;
+         return;
+     }
+-    if (!wine_debug) return;
++    if (!wine_debug) wine_debug = default_debug;
+     if (!strcmp( wine_debug, "help" )) debug_usage();
+ 
+     app_name = main_argv[1];
+diff --git a/dlls/user32/Makefile.in b/dlls/user32/Makefile.in
+index 8ee03dec..ac9759ff 100644
+--- a/dlls/user32/Makefile.in
++++ b/dlls/user32/Makefile.in
+@@ -4,6 +4,7 @@ IMPORTLIB = user32
+ IMPORTS   = $(PNG_PE_LIBS) gdi32 sechost advapi32 kernelbase win32u uuid
+ EXTRAINCL = $(PNG_PE_CFLAGS)
+ DELAYIMPORTS = imm32 combase setupapi
++i386_EXTRADLLFLAGS = -Wl,--image-base,0x7e410000
+ 
+ SOURCES = \
+ 	button.c \
+diff --git a/dlls/win32k.sys/win32k.sys.spec b/dlls/win32k.sys/win32k.sys.spec
+index c7943915..c36733b5 100644
+--- a/dlls/win32k.sys/win32k.sys.spec
++++ b/dlls/win32k.sys/win32k.sys.spec
+@@ -194,22 +194,22 @@
+ @ stub PATHOBJ_vGetBounds
+ @ stdcall RtlAnsiCharToUnicodeChar(ptr) ntoskrnl.exe.RtlAnsiCharToUnicodeChar
+ @ stdcall -norelay RtlCaptureContext(ptr) ntoskrnl.exe.RtlCaptureContext
+-@ stdcall -arch=x86_64 RtlCopyMemory(ptr ptr long) ntoskrnl.exe.RtlCopyMemory
+-@ stub RtlCopyMemoryNonTemporal
++@ stdcall -arch=!i386 RtlCopyMemory(ptr ptr long) ntoskrnl.exe.RtlCopyMemory
++@ stdcall -arch=x86_64 RtlCopyMemoryNonTemporal(ptr ptr long) ntoskrnl.exe.RtlCopyMemoryNonTemporal
+ @ stdcall RtlFillMemory(ptr long long) ntoskrnl.exe.RtlFillMemory
+-@ stub RtlLookupFunctionEntry
++@ stdcall -arch=!i386 RtlLookupFunctionEntry(long ptr ptr) ntoskrnl.exe.RtlLookupFunctionEntry
+ @ stdcall RtlMoveMemory(ptr ptr long) ntoskrnl.exe.RtlMoveMemory
+ @ stdcall RtlMultiByteToUnicodeN(ptr long ptr ptr long) ntoskrnl.exe.RtlMultiByteToUnicodeN
+-@ stub RtlPcToFileHeader
++@ stdcall RtlPcToFileHeader(ptr ptr) ntoskrnl.exe.RtlPcToFileHeader
+ @ stdcall -norelay RtlRaiseException(ptr) ntoskrnl.exe.RtlRaiseException
+-@ stub RtlRestoreContext
++@ cdecl -arch=!i386 RtlRestoreContext(ptr ptr) ntoskrnl.exe.RtlRestoreContext
+ @ stdcall RtlUnicodeToMultiByteN(ptr long ptr ptr long) ntoskrnl.exe.RtlUnicodeToMultiByteN
+ @ stdcall RtlUnicodeToMultiByteSize(ptr ptr long) ntoskrnl.exe.RtlUnicodeToMultiByteSize
+ @ stdcall -norelay RtlUnwind(ptr ptr ptr ptr) ntoskrnl.exe.RtlUnwind
+-@ stdcall -arch=x86_64 RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntoskrnl.exe.RtlUnwindEx
++@ stdcall -arch=!i386 RtlUnwindEx(ptr ptr ptr ptr ptr ptr) ntoskrnl.exe.RtlUnwindEx
+ @ stdcall RtlUpcaseUnicodeChar(long) ntoskrnl.exe.RtlUpcaseUnicodeChar
+ @ stdcall RtlUpcaseUnicodeToMultiByteN(ptr long ptr ptr long) ntoskrnl.exe.RtlUpcaseUnicodeToMultiByteN
+-@ stub RtlVirtualUnwind
++@ stdcall -arch=!i386 RtlVirtualUnwind(long long long ptr ptr ptr ptr ptr) ntoskrnl.exe.RtlVirtualUnwind
+ @ stdcall RtlZeroMemory(ptr long) ntoskrnl.exe.RtlZeroMemory
+ @ stub STROBJ_bEnum
+ @ stub STROBJ_bEnumPositionsOnly
+@@ -232,15 +232,15 @@
+ @ stub XLATEOBJ_hGetColorTransform
+ @ stub XLATEOBJ_iXlate
+ @ stub XLATEOBJ_piVector
+-@ stub __C_specific_handler
+-@ stub __chkstk
++@ stdcall -arch=!i386 __C_specific_handler(ptr long ptr ptr) ntoskrnl.exe.__C_specific_handler
++@ cdecl -arch=!i386 -norelay __chkstk() ntoskrnl.exe.__chkstk
+ @ cdecl -private _itoa(long ptr long) ntoskrnl.exe._itoa
+ @ cdecl -private _itow(long ptr long) ntoskrnl.exe._itow
+-@ cdecl -private -arch=x86_64 _local_unwind(ptr ptr) ntoskrnl.exe._local_unwind
+-@ stub _setjmp
+-@ stub _setjmpex
+-@ stub longjmp
+-@ stub memcmp
++@ cdecl -private -arch=win64 _local_unwind(ptr ptr) ntoskrnl.exe._local_unwind
++@ cdecl -norelay _setjmp(ptr) ntoskrnl.exe._setjmp
++@ cdecl -arch=!i386 -norelay _setjmpex(ptr ptr) ntoskrnl.exe._setjmpex
++@ cdecl longjmp(ptr long) ntoskrnl.exe.longjmp
++@ cdecl memcmp(ptr ptr long) ntoskrnl.exe.memcmp
+ @ cdecl -private memcpy(ptr ptr long) ntoskrnl.exe.memcpy
+ @ cdecl -private memmove(ptr ptr long) ntoskrnl.exe.memmove
+ @ cdecl -private memset(ptr long long) ntoskrnl.exe.memset
+diff --git a/loader/wine.inf.in b/loader/wine.inf.in
+index aa7a6c25..5f609530 100644
+--- a/loader/wine.inf.in
++++ b/loader/wine.inf.in
+@@ -72,6 +72,7 @@ AddReg=\
+     OLE,\
+     Printing,\
+     ProtonOverrides,\
++    CustomOverrides,\
+     Services, \
+     SessionMgr,\
+     SteamClient,\
+@@ -1802,3 +1803,10 @@ HKLM,Software\Wow6432Node\Khronos\OpenXR\1,"ActiveRuntime",,"C:\openxr\wineopenx
+ ;;Other app-specific overrides
+ HKCU,Software\Wine\AppDefaults\Pentiment.exe\DllOverrides,"SpeechSynthesisWrapper",4,
+ HKCU,Software\Wine\AppDefaults\Maine-Win64-Shipping.exe\DllOverrides,"SpeechSynthWrapper",4,
++
++[CustomOverrides]
++;;TkG: prefer game-shipped wrapper/mod-loader DLLs (dgVoodoo/cnc-ddraw, BepInEx, ASI loaders)
++HKCU,Software\Wine\DllOverrides,"ddraw",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"winhttp",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"winmm",0x2,"native,builtin"
++HKCU,Software\Wine\DllOverrides,"version",0x2,"native,builtin"
+diff --git a/programs/explorer/desktop.c b/programs/explorer/desktop.c
+index 82ce76ff..eff60fe9 100644
+--- a/programs/explorer/desktop.c
++++ b/programs/explorer/desktop.c
+@@ -40,7 +40,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(explorer);
+ #define DESKTOP_CLASS_ATOM ((LPCWSTR)MAKEINTATOM(32769))
+ #define DESKTOP_ALL_ACCESS 0x01ff
+ 
+-static const WCHAR default_driver[] = L"mac,x11,wayland";
++static const WCHAR default_driver[] = L"mac,wayland,x11";
+ 
+ static BOOL using_root = TRUE;
+ 
+diff --git a/programs/winecfg/resource.h b/programs/winecfg/resource.h
+index 58ae5986..a9caa16f 100644
+--- a/programs/winecfg/resource.h
++++ b/programs/winecfg/resource.h
+@@ -218,7 +218,7 @@
+ #define IDC_SYSPARAMS_MENUBAR           8431
+ 
+ /* Staging tab */
+-#define IDC_ENABLE_CSMT                 9001
++#define IDC_DISABLE_CSMT                9001
+ #define IDC_ENABLE_VAAPI                9002
+ #define IDC_ENABLE_EAX                  9003
+ #define IDC_ENABLE_HIDEWINE             9004
+diff --git a/programs/winecfg/staging.c b/programs/winecfg/staging.c
+index 975735c6..4175e0e9 100644
+--- a/programs/winecfg/staging.c
++++ b/programs/winecfg/staging.c
+@@ -33,13 +33,25 @@
+ static BOOL csmt_get(void)
+ {
+     WCHAR *buf = get_reg_key(config_key, L"Direct3D", L"csmt", NULL);
+-    BOOL ret = buf ? !!*buf : TRUE;
++    // (dword=0 csmt=off, dword=1 csmt=on )
++    // since we want this toggle to disable upstream's CSMT
++    // flip existing csmt dword, returning false if not set.
++    BOOL ret = buf ? !*buf : FALSE;
+     free(buf);
+     return ret;
+ }
+ static void csmt_set(BOOL status)
+ {
+-    set_reg_key_dword(config_key, L"Direct3D", L"csmt", status);
++    if (status)
++    {
++        // TRUE, we disable upstream's csmt by setting dword to 0
++        set_reg_key_dword(config_key, L"Direct3D", L"csmt", 0);
++    }
++    else
++    {
++        // FALSE, we remove the csmt key letting wine use its default
++        set_reg_key(config_key, L"Direct3D", L"csmt", NULL);
++    }
+ }
+ 
+ /*
+@@ -108,7 +120,7 @@ static void gtk3_set(BOOL status)
+ 
+ static void load_staging_settings(HWND dialog)
+ {
+-    CheckDlgButton(dialog, IDC_ENABLE_CSMT, csmt_get() ? BST_CHECKED : BST_UNCHECKED);
++    CheckDlgButton(dialog, IDC_DISABLE_CSMT, csmt_get() ? BST_CHECKED : BST_UNCHECKED);
+     CheckDlgButton(dialog, IDC_ENABLE_VAAPI, vaapi_get() ? BST_CHECKED : BST_UNCHECKED);
+     CheckDlgButton(dialog, IDC_ENABLE_EAX, eax_get() ? BST_CHECKED : BST_UNCHECKED);
+     CheckDlgButton(dialog, IDC_ENABLE_HIDEWINE, hidewine_get() ? BST_CHECKED : BST_UNCHECKED);
+@@ -138,8 +150,8 @@ INT_PTR CALLBACK StagingDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPARAM lPar
+         if (HIWORD(wParam) != BN_CLICKED) break;
+         switch (LOWORD(wParam))
+         {
+-        case IDC_ENABLE_CSMT:
+-            csmt_set(IsDlgButtonChecked(hDlg, IDC_ENABLE_CSMT) == BST_CHECKED);
++        case IDC_DISABLE_CSMT:
++            csmt_set(IsDlgButtonChecked(hDlg, IDC_DISABLE_CSMT) == BST_CHECKED);
+             SendMessageW(GetParent(hDlg), PSM_CHANGED, 0, 0);
+             return TRUE;
+         case IDC_ENABLE_VAAPI:
+diff --git a/programs/winecfg/winecfg.rc b/programs/winecfg/winecfg.rc
+index ff116523..3abc69f6 100644
+--- a/programs/winecfg/winecfg.rc
++++ b/programs/winecfg/winecfg.rc
+@@ -332,7 +332,7 @@ FONT 8, "MS Shell Dlg"
+ BEGIN
+     GROUPBOX    "Staging settings",IDC_STATIC,8,4,244,210
+     LTEXT       "The following settings are experimental and may break stuff!\nMake sure to reset them again in case of a problem.",IDC_STATIC,16,16,230,16
+-    CONTROL     "Enable &CSMT for better graphic performance (deprecated)",IDC_ENABLE_CSMT,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,16,40,230,8
++    CONTROL     "Disable upstream &CSMT (not recommended)",IDC_DISABLE_CSMT,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,16,40,230,8
+     CONTROL     "Enable &VAAPI as backend for DXVA2 GPU decoding",IDC_ENABLE_VAAPI,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,16,55,230,8
+     CONTROL     "Enable Environmental Audio E&xtensions (EAX)",IDC_ENABLE_EAX,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,16,70,230,8
+     CONTROL     "&Hide Wine version from applications",IDC_ENABLE_HIDEWINE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,16,85,230,8
