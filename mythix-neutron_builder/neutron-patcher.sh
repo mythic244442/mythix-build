@@ -57,6 +57,10 @@ REQUESTED_GROUPS=("$@")
 
 [ -d "$WINE_SRC" ]    || err "Wine source directory not found: $WINE_SRC"
 [ -d "$PATCHES_DIR" ] || err "Patches directory not found: $PATCHES_DIR"
+# Patches are applied from inside the Wine tree, so relative paths
+# (e.g. --patches-dir ./patches) must be made absolute first.
+WINE_SRC="$(cd "$WINE_SRC" && pwd)"
+PATCHES_DIR="$(cd "$PATCHES_DIR" && pwd)"
 
 # Env vars from neutron-builder.sh
 WINE_SOURCE_KEY="${WINE_SOURCE_KEY:-}"

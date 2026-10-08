@@ -143,6 +143,11 @@ _lsc_target="${_wine_lib_dir}/x86_64-windows/lsteamclient.dll"
 
 if [ -f "${_lsc_target}" ]; then
     ok "lsteamclient.dll already present — skipping bootstrap"
+elif [ "${NEUTRON_STEAM_BRIDGE:-}" = "ge" ]; then
+    # This build was meant to make its own; a foreign Proton's copy would not
+    # match this Wine (Steam games crash in the steamclient trampolines).
+    warn "lsteamclient was supposed to be built from source but is missing — NOT downloading a"
+    warn "mismatched Proton copy. Steam games will not reach Steam with this package."
 else
     warn "lsteamclient.dll not found in Wine build; searching for Proton source..."
 
@@ -310,9 +315,17 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 sep "Checking for additional Steam components"
 
+if [ "${NEUTRON_STEAM_BRIDGE:-}" = "ge" ]; then
+    # lsteamclient + steam.exe were built from GE's source with this exact Wine;
+    # copying another Proton's binaries over them would break the ABI match.
+    ok "Steam bridge built from source (lsteamclient + steam.exe) — no Proton components needed"
+    _proton_src=""
+    _skip_steam_components=true
+fi
+
 # If we skipped the Proton search above (lsteamclient already present), find
 # a Proton source now for the other components.
-if [ -z "${_proton_src:-}" ]; then
+if [ "${_skip_steam_components:-false}" != "true" ] && [ -z "${_proton_src:-}" ]; then
     # Re-run the same discovery logic — the variables may not exist if
     # lsteamclient was already present and the search block was skipped.
     if [ -z "${_proton_candidates+x}" ] || [ ${#_proton_candidates[@]} -eq 0 ]; then
@@ -369,7 +382,9 @@ if [ -z "${_proton_src:-}" ]; then
     done
 fi
 
-if [ -z "${_proton_src:-}" ]; then
+if [ "${_skip_steam_components:-false}" = "true" ]; then
+    :
+elif [ -z "${_proton_src:-}" ]; then
     warn "No Proton source found — skipping additional Steam component bootstrap."
 else
     msg2 "Using Proton source: ${_proton_src}"
@@ -385,7 +400,9 @@ else
     for _f in "${_steam_helper_files[@]}"; do
         _src="${_proton_src}/${_f}"
         _dst="${_wine_lib_dir}/${_f#lib/wine/}"
-        if [ -f "${_src}" ]; then
+        if [ -f "${_dst}" ]; then
+            msg2 "Kept build's own: ${_f}"   # never replace what Wine built
+        elif [ -f "${_src}" ]; then
             mkdir -p "$(dirname "${_dst}")"
             cp -f "${_src}" "${_dst}"
             msg2 "Copied: ${_f}"
@@ -496,6 +513,15 @@ fi
 printf '%s %s\n' "$(date +%s)" "$_version_str" > "${NEUTRON_PACKAGE_DIR}/version"
 ok "version file written: $_version_str"
 
+# The launcher's fallback schema (used only when the version file can't be
+# read) names this package too, so nobody has to edit it by hand.
+if [[ "$_version_str" =~ ^[A-Za-z0-9._+-]+$ ]] && \
+   grep -q '^FALLBACK_PREFIX_VERSION = ' "${NEUTRON_PACKAGE_DIR}/neutron"; then
+    sed -i "s|^FALLBACK_PREFIX_VERSION = .*|FALLBACK_PREFIX_VERSION = \"${_version_str}\"|" \
+        "${NEUTRON_PACKAGE_DIR}/neutron"
+    msg2 "launcher fallback prefix schema: ${_version_str}"
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  build-info — facts about this build for the neutron launcher (KEY=VALUE)
 #  WAYLAND=1 makes the launcher default to the native Wayland driver when a
@@ -509,6 +535,12 @@ ok "version file written: $_version_str"
     printf 'SOURCE=%s\n' "${NEUTRON_SOURCE_KEY:-}"
     printf 'PROFILE=%s\n' "${NEUTRON_PROFILE:-}"
     printf 'BUILD_MODE=%s\n' "${NEUTRON_BUILD_MODE:-}"
+    # Steam bridge built with this Wine → the launcher can use Proton's Steam model
+    if [ "${NEUTRON_STEAM_BRIDGE:-}" = "ge" ] && \
+       [ -f "${WINE_INSTALL_PREFIX}/lib/wine/x86_64-windows/lsteamclient.dll" ] && \
+       [ -f "${WINE_INSTALL_PREFIX}/lib/wine/x86_64-unix/lsteamclient.so" ]; then
+        printf 'STEAM_BRIDGE=ge\n'
+    fi
     [ -n "${NEUTRON_PROFILE_WAYLAND:-}" ] && printf 'WAYLAND=%s\n' "$NEUTRON_PROFILE_WAYLAND"
     printf 'BUILT=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "${NEUTRON_PACKAGE_DIR}/build-info"
@@ -570,8 +602,15 @@ _verify "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf"       "toolmanifest.vdf"
 _verify "${NEUTRON_PACKAGE_DIR}/neutron"                "neutron launcher"
 _verify "${WINE_INSTALL_PREFIX}/bin/wine"              "files/bin/wine"
 _verify "${WINE_INSTALL_PREFIX}/bin/wineserver"        "files/bin/wineserver"
-if [ "${NEUTRON_BUILD_MODE:-classic}" = "classic" ]; then
-    _verify "${WINE_INSTALL_PREFIX}/bin/wine64"        "files/bin/wine64"
+# classic builds: the 32-bit side is a full i386-unix tree (Wine 10+ has no
+# separate bin/wine64 any more — one loader name for both)
+if [ "${NEUTRON_BUILD_MODE:-classic}" = "classic" ] && [ "${SKIP_32BIT:-false}" != "true" ]; then
+    _verify "${WINE_INSTALL_PREFIX}/lib/wine/i386-unix/ntdll.so" "files/lib/wine/i386-unix (32-bit side)"
+fi
+if [ "${NEUTRON_STEAM_BRIDGE:-}" = "ge" ]; then
+    _verify "${WINE_INSTALL_PREFIX}/lib/wine/x86_64-windows/lsteamclient.dll" "lsteamclient.dll (64-bit, built)"
+    _verify "${WINE_INSTALL_PREFIX}/lib/wine/x86_64-unix/lsteamclient.so"     "lsteamclient.so  (64-bit, built)"
+    _verify "${WINE_INSTALL_PREFIX}/lib/wine/x86_64-windows/steam.exe"        "steam.exe        (64-bit, built)"
 fi
 
 # ── Package size ──────────────────────────────────────────────────────────────

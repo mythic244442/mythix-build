@@ -451,6 +451,7 @@ fi
 # ══════════════════════════════════════════════════════════════════════════════
 _PROFILE_VARS=( PROFILE_DESC PROFILE_PIPELINE PROFILE_BUILD_MODE PROFILE_PACKAGE_NAME
                 PROFILE_VERSION_LABEL PROFILE_WAYLAND PROFILE_PATCH_GROUPS PROFILE_FFMPEG
+                PROFILE_STEAM_BRIDGE STEAM_BRIDGE_SKIP_PATCH_DIRS
                 LEGACY_WINE_BASE PIN_WINE_REPO PIN_WINE_COMMIT PIN_TKG_COMMIT
                 PIN_STAGING_REPO PIN_STAGING_COMMIT PIN_STAGING_REF PIN_GE_REPO
                 PIN_GE_COMMIT PIN_FFMPEG_REPO PIN_FFMPEG_COMMIT TKG_SOURCE )
@@ -539,6 +540,7 @@ _load_profile() {
     msg2 "Wayland     : $([ "${PROFILE_WAYLAND:-0}" = "1" ] && echo "on (launcher default)" || echo off)"
     msg2 "Patch groups: ${PATCH_GROUPS}"
     [ "${PROFILE_FFMPEG:-none}" != "none" ] && msg2 "FFmpeg      : ${PROFILE_FFMPEG} (winedmo media backend)"
+    [ "${PROFILE_STEAM_BRIDGE:-none}" != "none" ] && msg2 "Steam bridge: lsteamclient + steam.exe from ${PROFILE_STEAM_BRIDGE} source"
     ok "Profile loaded: ${PROFILE_DIR}"
 }
 
@@ -1280,7 +1282,7 @@ _kron4ek_tkg_compat_redist() {
                     autoreconf -fiv 2>/dev/null
                     mkdir -p '$VALVE_BUILD'
                     cd '$VALVE_BUILD'
-                    '$VALVE_SRC/configure' --enable-win64 2>/dev/null
+                    '$VALVE_SRC/configure' --enable-archs=i386,x86_64 2>/dev/null
                     make -j\$(nproc) tools/makedep
                 " && ok "  Valve makedep built" || warn "  Valve makedep build failed — will retry without"
         fi
@@ -1867,10 +1869,11 @@ print_summary() {
     else
         printf "    ${C_DIM}-${C_R}  Sniper mode   — disabled (standard host mode)\n"
     fi
-    if [ -f "${BUILD_RUN_DIR:-/dev/null}/neutron-patch.log" ]; then
-        local _pcount
-        _pcount="$(grep -c '✓' "${BUILD_RUN_DIR}/neutron-patch.log" 2>/dev/null || echo 0)"
-        printf "    ${C_GRN}✓${C_R}  Patches       — ${_pcount} patches applied\n"
+    if [ -s "${BUILD_RUN_DIR:-/dev/null}/neutron-patch.manifest" ]; then
+        local _pcount _pgroups
+        _pcount="$(grep -c 'result=applied' "${BUILD_RUN_DIR}/neutron-patch.manifest" || true)"
+        _pgroups="$(cut -d= -f1 "${BUILD_RUN_DIR}/neutron-patch.manifest" | sort -u | paste -sd, -)"
+        printf "    ${C_GRN}✓${C_R}  Patches       — %s applied (%s)\n" "${_pcount:-0}" "$_pgroups"
     elif [ -n "${PATCH_GROUPS:-}" ] && [ "$PATCH_GROUPS" != "none" ]; then
         printf "    ${C_GRN}✓${C_R}  Patches       — groups: ${PATCH_GROUPS}\n"
     fi
@@ -1997,7 +2000,7 @@ fi
 
 # ── Build mode ───────────────────────────────────────────────────────────────
 # classic = 64-bit tree (wine64) + 32-bit tree — Mythix Wine's layout
-# wow64   = one unified --enable-archs tree (+ i386-unix drivers) — Neutron line
+# wow64   = one unified --enable-archs=i386,x86_64 tree (+ i386-unix drivers) — Neutron line
 if [ -z "$NEUTRON_BUILD_MODE" ]; then
     case "$WINE_SOURCE_KEY" in
         mythix-wine) NEUTRON_BUILD_MODE="classic" ;;
@@ -5238,6 +5241,7 @@ export BUILD_NAME SNIPER_MODE
 export NEUTRON_SOURCE_KEY="$WINE_SOURCE_KEY" NEUTRON_BUILD_MODE
 export NEUTRON_PROFILE="${PROFILE_NAME:-}"
 export NEUTRON_PROFILE_WAYLAND="${PROFILE_WAYLAND:-}"
+export NEUTRON_STEAM_BRIDGE="${PROFILE_STEAM_BRIDGE:-}"
 export NEUTRON_SOURCE_LOCK=""
 if [ -n "$PROFILE_NAME" ]; then
     [ -f "${BUILD_RUN_DIR}/mythix-source.lock" ] && \

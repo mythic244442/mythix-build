@@ -25,7 +25,7 @@ Explicit flags still win over the profile: `--name`, `--patches` and `--build-mo
 
 | Profile | Pipeline | Mode | Package | What it is |
 |---|---|---|---|---|
-| `mythix-11.19` | `ge` | classic | `Mythix-Neutron-11.19-1` | Valve bleeding-edge + GE (incl. Wayland) + curated TkG 11.19 + DS4. Wayland-first. |
+| `mythix-11.19` | `ge` | wow64 | `Mythix-Neutron-11.19-4` | Valve bleeding-edge + GE (incl. Wayland) + curated TkG 11.19 + DS4. Wayland-first. |
 | `mythix-11.11` | `legacy` | classic | `Mythix-Neutron-11.11-2` | Safety net. A *reconstructed* recipe of the last X11-first bleeding-edge build. |
 | `mythix-10.17` | `legacy` | classic | `Mythix-Neutron-10.17-2` | **Frozen.** The esync/fsync build on Valve proton_10.0. Never edit it. |
 
@@ -48,12 +48,14 @@ profiles/<name>/
 |---|---|---|
 | `PROFILE_DESC` | text | One line shown by `--list-profiles` |
 | `PROFILE_PIPELINE` | `ge` \| `legacy` | Which source pipeline prepares the tree (see below) |
-| `PROFILE_BUILD_MODE` | `classic` \| `wow64` | `classic` = 64-bit tree + 32-bit tree (`bin/wine64`). `wow64` = one unified tree |
+| `PROFILE_BUILD_MODE` | `classic` \| `wow64` | `classic` = 64-bit tree + 32-bit tree (Wine 10.x bases, the 11.11 base). `wow64` = one unified `--enable-archs` tree + i386-unix drivers, Valve's Proton layout. Newer Valve loaders need `wow64`: the Neutron 11.0 base 66ee546 (2026-09-11) and the 11.19 pin do, the 11.11 pin (2026-07-16) doesn't. The builder refuses `classic` for such a tree |
 | `PROFILE_PACKAGE_NAME` | e.g. `Mythix-Neutron-11.19-1` | Package dir + version tag. The launcher picks its build profile and prefix schema from it |
 | `PROFILE_VERSION_LABEL` | e.g. `11.19` | Goes into `wine --version` (`wine-11.19-mythix.<base>`) |
 | `PROFILE_WAYLAND` | `0` \| `1` | `1`: the `neutron` launcher defaults to the native Wayland driver on Wayland sessions |
 | `PROFILE_PATCH_GROUPS` | `none` \| `all` \| `a,b` | Neutron patch groups (`patches/<group>/`) applied after the pipeline. **Strict**: a failure stops the build |
 | `PROFILE_FFMPEG` | `none` \| `static` | `static`: build FFmpeg at `PIN_FFMPEG_COMMIT` and link it into `winedmo.so` |
+| `PROFILE_STEAM_BRIDGE` | `none` \| `ge` | `ge`: build GE's `lsteamclient` + `steam.exe` in-tree with this Wine (see below) |
+| `STEAM_BRIDGE_SKIP_PATCH_DIRS` | GE-relative dirs | GE helper patch dirs to leave out (11.19 skips `patches/discordrpc/helpers`) |
 
 Pins for the **ge** pipeline:
 
@@ -84,9 +86,10 @@ Builds Mythix Wine on GE-Proton's tested patch stack:
 2. GE's `protonprep-valve-staging.sh` "WINE PATCHING" section, run verbatim. This
    gives staging with GE's exclusions, game fixes, Wayland, the media rework and
    wineopenxr. Any failed hunk stops the build (exit 2).
-3. The profile's `patches/*.patch`, applied strictly with `git apply`.
-4. Version branding: `wine-<label>-mythix.<base>  ( Mythix Wine )`.
-5. Source lock: `<build-run>/mythix-source.lock`.
+3. With `PROFILE_STEAM_BRIDGE=ge`: the Steam client bridge (see below).
+4. The profile's `patches/*.patch`, applied strictly with `git apply`.
+5. Version branding: `wine-<label>-mythix.<base>  ( Mythix Wine )`.
+6. Source lock: `<build-run>/mythix-source.lock`.
 
 Each layer is a commit (`mythix: …`) in `<src>/mythix-ge/wine`, so
 `git log` / `git diff` show exactly what every layer did. Re-running starts from a
@@ -111,6 +114,55 @@ Its behaviour is unchanged; a profile only injects pins. Pin failures are fatal,
 and a pinned build starts from a pristine tree. It exists so 10.17 (and 11.11)
 can always be rebuilt the way they were made.
 
+### The Steam client bridge (`PROFILE_STEAM_BRIDGE=ge`)
+
+Steam games talk to the Linux Steam client through `lsteamclient`. Valve's
+ntdll redirects Steam's own `steamclient64.dll` into `lsteamclient.dll`, so
+lsteamclient has to be built for *this exact Wine*. A copy taken from some other
+Proton crashes Steam games (the old Cyberpunk "ABI mismatch").
+
+With the bridge on, the pipeline:
+
+1. Runs GE's helper section of `protonprep-valve-staging.sh` (GE's lsteamclient
+   patches) on GE's `lsteamclient/` and `steam_helper/`.
+2. Adds them to the Wine tree as `dlls/lsteamclient` and `programs/steam_helper`.
+
+Wine's own build then makes `lsteamclient.dll/.so` and `steam.exe` for every
+arch. The packager never downloads Proton bits for such a build.
+
+The package's `build-info` gets `STEAM_BRIDGE=ge`. The `neutron` launcher then
+follows Proton's Steam model for launches of a real Steam app (`SteamGameId` is
+all digits) while the Steam client is running:
+
+- It launches the game through the builtin `steam.exe`, which registers the
+  Steam client for the game.
+- It copies Steam's `legacycompat` `steamclient{,64}.dll` into the prefix.
+
+Every other launch goes straight to the game, like a build without the bridge.
+That covers the Mythix Launcher's hex ids for non-Steam games and any launch
+while Steam is closed. `NEUTRON_USE_STEAM_SHIM=1` forces `steam.exe` and `=0`
+turns it off; `neutron diag` shows the decision.
+
+## DualShock 4 / DualSense (mythix-11.19)
+
+Three layers handle a Sony pad:
+
+- **winebus**, patch group `mythix-ds4`: hidraw haptics become native DS4
+  rumble, and native DS4 output reports (lightbar) pass through.
+- **xinput**, GE's Sony stack: with `PROTON_SONY_AUTO_XINPUT=1` a hidraw DS4 /
+  DualSense is also an XInput controller. That slot steps aside when a game
+  reads the pad natively or Steam Input owns it. GE-Proton sets this by default,
+  and so does the `neutron` launcher on builds whose xinput has the stack.
+- **xinput**, `patches/0003-mythix-xinput-ds4-native.patch`: Luna's
+  `MYTHIX_DS4_GLYPHS=1` switch. The pad never shows up in `XInputGetState`, so
+  games with native PlayStation support read it over HID and show PlayStation
+  glyphs. xinput still opens the pad, so `XInputSetState` rumbles it
+  (Cyberpunk 2077 drives vibration that way). The Mythix Launcher sets the
+  switch for Cyberpunk 2077, RDR2, Elden Ring and The Witcher 3.
+
+The Neutron 11.0 line (Valve's stock xinput) keeps Luna's original xinput
+change, with its Sony direct path, in the patch group `mythix-ds4-xinput`.
+
 ## Source locks and build-info
 
 Every profile build copies these into the package:
@@ -123,7 +175,7 @@ Every profile build copies these into the package:
 To check what an installed build is made of:
 
 ```bash
-cat /path/to/compatibilitytools.d/Mythix-Neutron-11.19-1/mythix-source.lock
+cat /path/to/compatibilitytools.d/Mythix-Neutron-11.19-4/mythix-source.lock
 ```
 
 ## Bumping a ge profile to a newer GE
@@ -165,3 +217,6 @@ package revision) instead of editing a shipped one:
 - `0002-mythix-build-compat.patch`: guarded shims for the Ubuntu 24.04 container's
   older libraries (e.g. `XKB_VMOD_NAME_SCROLL` from libxkbcommon 1.7). Each shim is
   a no-op on newer systems.
+- `0003-mythix-xinput-ds4-native.patch`: `MYTHIX_DS4_GLYPHS=1` native
+  PlayStation mode on top of GE's Sony XInput stack: hidden from
+  `XInputGetState`, still rumbled by `XInputSetState` (see the DualShock section).

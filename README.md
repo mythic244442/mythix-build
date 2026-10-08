@@ -548,6 +548,30 @@ manual setup step.
   take priority over Wine builtins.
 - Steam bridge override (`lsteamclient=n,b`).
 
+**Steam client bridge (builds with `STEAM_BRIDGE=ge` in `build-info`).** These
+builds ship an `lsteamclient` built with the same Wine. A launch goes through
+Proton's `steam.exe` helper, which registers the Steam client for the game, only
+when both of these hold:
+
+- `SteamGameId` (or `SteamAppId`) is a real Steam app id (all digits).
+- The Steam client is running.
+
+Other launches go straight to the game, for example the Mythix Launcher's hex
+ids for non-Steam games, or any launch while Steam is closed.
+`NEUTRON_USE_STEAM_SHIM=1` forces `steam.exe` and `=0` turns it off. Steam's
+`steamclient{,64}.dll` are copied into the prefix only for `steam.exe` launches.
+
+**DualShock 4 / DualSense.** On 11.19+ builds, xinput carries GE's Sony stack.
+By default a Sony pad on hidraw is also an XInput controller
+(`PROTON_SONY_AUTO_XINPUT=1`, GE-Proton's own default). That slot steps aside
+when a game reads the pad natively or when Steam Input owns it.
+
+For games with native PlayStation support, set `MYTHIX_DS4_GLYPHS=1`. The pad
+then never shows up in `XInputGetState`, so the game reads it over HID and
+shows PlayStation glyphs. `XInputSetState` still rumbles it. The Mythix
+Launcher sets it for Cyberpunk 2077, RDR2, Elden Ring and The Witcher 3.
+`neutron diag` shows the active mode.
+
 #### Patch System
 
 neutron-builder includes a full patch system (`neutron-patcher.sh`) that applies
@@ -555,9 +579,15 @@ patch groups to the Wine source between fetch and configure. For GE-Proton's
 gaming patches, use `--source ge-proton` instead — it runs GE's own patch script
 automatically. The patch system below is for your own custom patches.
 
-`patches/` ships with an empty `custom/` template — no pre-built patches are
-included. Drop your own `.patch` files into `custom/` (or any new subdirectory)
-and the patcher auto-discovers them.
+`patches/` ships with these groups:
+
+- `mythix-ds4`: Mythix DualShock 4 support in winebus (hidraw haptics and LED).
+- `mythix-ds4-xinput`: Luna's xinput DS4 work for the Neutron 11.0 line, on
+  Valve's stock xinput. The 11.19 profile carries its own xinput patch instead.
+- `custom/`: an empty template.
+
+Drop your own `.patch` files into `custom/` (or any new subdirectory) and the
+patcher auto-discovers them.
 
 **Usage:**
 

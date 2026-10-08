@@ -1,0 +1,170 @@
+Mythix DualShock 4 native PlayStation mode for GE's xinput (MYTHIX_DS4_GLYPHS=1).
+
+Origin : Luna's xinput DS4 work in Neutron-11.0-21199 (dlls/xinput1_3/main.c,
+         2026-10-05), carried onto the GE Sony XInput stack of the 11.19 tree.
+         Her full Neutron-line change is kept in patches/mythix-ds4-xinput/.
+
+GE 11.19 ships xzn's Sony stack (proton-ds5-haptic 0197-0204): a DualShock 4 /
+DualSense on hidraw is also an XInput controller when PROTON_SONY_AUTO_XINPUT=1
+(GE-Proton's default, and the neutron launcher's), and that slot steps aside when
+a game reads the pad natively or Steam Input owns it. This patch adds Luna's
+switch on top, for games with native PlayStation support (Cyberpunk 2077, RDR2,
+Elden Ring, The Witcher 3; the Mythix Launcher sets it for them):
+
+  MYTHIX_DS4_GLYPHS=1  The pad never shows up in XInputGetState(Ex) or
+                       XInputGetKeystroke, so the game takes input and
+                       PlayStation glyphs from its own HID path. XInput still
+                       opens the pad (its own HID collection, as Luna's Sony
+                       direct path did), so XInputSetState rumbles it: Cyberpunk
+                       2077 drives vibration through XInput. GE's Sony rumble
+                       translation sends the native report (USB 0x05 or
+                       Bluetooth 0x11). Capabilities report the real Sony IDs,
+                       the automatic fallback is off, and dinput keeps the Sony
+                       identity.
+
+11.19-3 shipped a first version of this patch that kept the pad out of XInput
+entirely. Glyphs were right but rumble was gone, because XInputSetState had no
+pad to send to.
+
+Curated 2026-10-07 against the mythix-11.19 tree (GE a3f58c5 + 0001 + 0002).
+---
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+index 6ccc4110..123fd6ac 100644
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -91,6 +91,7 @@ struct xinput_controller
+         PHIDP_PREPARSED_DATA preparsed;
+         HIDP_CAPS caps;
+         BOOL is_sony_gamepad;
++        BOOL mythix_rumble_only;    /* MYTHIX_DS4_GLYPHS: out of XInputGetState */
+         USHORT sony_product_id;
+         BYTE sony_output_seq;
+         HIDP_VALUE_CAPS lx_caps;
+@@ -130,6 +131,12 @@ static HANDLE steam_overlay_event;
+ static HANDLE steam_input_event;
+ static BOOL auto_sony_xinput;
+ static LONG steam_virtual_present;
++/* Mythix: MYTHIX_DS4_GLYPHS=1 is native PlayStation mode (Luna's Neutron 11.0
++ * xinput). A Sony pad never shows up in XInputGetState, so games with native
++ * PlayStation support read it over HID and show PlayStation glyphs. XInput
++ * still opens the pad for XInputSetState, because games such as Cyberpunk 2077
++ * drive its rumble through XInput. Read once at load. */
++static BOOL mythix_sony_native;
+ 
+ static SRWLOCK state_lock = SRWLOCK_INIT;
+ static XINPUT_STATE current_state[XUSER_MAX_COUNT];
+@@ -186,6 +193,29 @@ static BOOL automatic_sony_path(const WCHAR *path)
+             !wcsstr(path, L"&IG_") && !wcsstr(path, L"&ig_");
+ }
+ 
++static BOOL mythix_sony_native_enabled(void)
++{
++    const char *value = getenv("MYTHIX_DS4_GLYPHS");
++    return value && value[0] == '1';
++}
++
++/* Native mode opens the pad's own HID collection, like the Sony direct path. */
++static BOOL mythix_sony_native_path(const WCHAR *path)
++{
++    return mythix_sony_native && sony_gamepad_product_id(path) &&
++            !wcsstr(path, L"&IG_") && !wcsstr(path, L"&ig_");
++}
++
++/* Any Sony pad (VID 054c), an XInput companion included. */
++static BOOL mythix_sony_vendor_path(const WCHAR *path)
++{
++    unsigned int vendor, product;
++
++    return (swscanf(path, L"\\\\?\\hid#vid_%04x&pid_%04x", &vendor, &product) == 2 ||
++            swscanf(path, L"\\\\?\\HID#VID_%04x&PID_%04x", &vendor, &product) == 2) &&
++            vendor == SONY_VENDOR_ID;
++}
++
+ static void set_current_state(UINT index, const XINPUT_STATE *state)
+ {
+     AcquireSRWLockExclusive(&state_lock);
+@@ -580,6 +610,7 @@ static BOOL controller_init(struct xinput_controller *controller, PHIDP_PREPARSE
+     controller->hid.caps = *caps;
+     controller->hid.sony_product_id = sony_gamepad_product_id(device_path);
+     controller->hid.is_sony_gamepad = !!controller->hid.sony_product_id;
++    controller->hid.mythix_rumble_only = mythix_sony_native && mythix_sony_vendor_path(device_path);
+     controller->hid.sony_output_seq = 0;
+     if (!(controller->hid.feature_report_buf = calloc(1, controller->hid.caps.FeatureReportByteLength))) goto failed;
+     if (!controller_check_caps(controller, device, preparsed)) goto failed;
+@@ -597,7 +628,9 @@ static BOOL controller_init(struct xinput_controller *controller, PHIDP_PREPARSE
+     controller->device = device;
+     if (!controller_enable(controller)) goto failed;
+ 
+-    set_current_state(controller - controllers, &state);
++    if (controller->hid.mythix_rumble_only)
++        TRACE("MYTHIX_DS4_GLYPHS: %s is rumble-only, XInputGetState won't report it\n", debugstr_w(device_path));
++    else set_current_state(controller - controllers, &state);
+     return TRUE;
+ 
+ failed:
+@@ -830,6 +863,18 @@ static void update_controller_list(void)
+         free(paths);
+     }
+ 
++    if (mythix_sony_native && !steam_virtual_present)
++    {
++        HidD_GetHidGuid(&guid);
++        if (!(paths = get_device_interfaces(&guid))) goto done;
++        for (path = paths; *path; path += wcslen(path) + 1)
++        {
++            if (!mythix_sony_native_path(path)) continue;
++            if (!try_add_device(path, FALSE)) break;
++        }
++        free(paths);
++    }
++
+ done:
+     LeaveCriticalSection(&xinput_cs);
+ }
+@@ -1002,7 +1047,7 @@ static void read_controller_state(struct xinput_controller *controller)
+ 
+     if (controller->enabled)
+     {
+-        set_current_state(controller - controllers, &state);
++        if (!controller->hid.mythix_rumble_only) set_current_state(controller - controllers, &state);
+         memset(&controller->hid.read_ovl, 0, sizeof(controller->hid.read_ovl));
+         controller->hid.read_ovl.hEvent = controller->read_event;
+         ret = ReadFile(controller->device, report_buf, report_len, NULL, &controller->hid.read_ovl);
+@@ -1026,6 +1071,7 @@ static LRESULT CALLBACK xinput_devnotify_wndproc(HWND hwnd, UINT msg, WPARAM wpa
+                 try_add_device(iface->dbcc_name, FALSE);
+             }
+             else if (automatic_sony_path(iface->dbcc_name)) try_add_device(iface->dbcc_name, TRUE);
++            else if (mythix_sony_native_path(iface->dbcc_name)) try_add_device(iface->dbcc_name, FALSE);
+         }
+         if (wparam == DBT_DEVICEREMOVECOMPLETE)
+         {
+@@ -1066,7 +1112,7 @@ static DWORD WINAPI hid_update_thread_proc(void *param)
+     hwnd = CreateWindowExW(0, cls.lpszClassName, NULL, 0, 0, 0, 0, 0,
+                            HWND_MESSAGE, NULL, NULL, NULL);
+     notif = RegisterDeviceNotificationW(hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+-    if (auto_sony_xinput)
++    if (auto_sony_xinput || mythix_sony_native)
+     {
+         HidD_GetHidGuid(&filter.dbcc_classguid);
+         hid_notif = RegisterDeviceNotificationW(hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+@@ -1158,6 +1204,11 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
+     case DLL_PROCESS_ATTACH:
+         xinput_instance = inst;
+         auto_sony_xinput = automatic_sony_enabled();
++        if ((mythix_sony_native = mythix_sony_native_enabled()))
++        {
++            TRACE("MYTHIX_DS4_GLYPHS=1: Sony pads are rumble-only in XInput, no automatic fallback.\n");
++            auto_sony_xinput = FALSE;
++        }
+         persistent_player1 = GetEnvironmentVariableA("PROTON_XINPUT_PERSISTENT_PLAYER1", value, sizeof(value)) == 1 &&
+                              value[0] == '1';
+         if (persistent_player1) TRACE("Keeping XInput player 1 connected across hotplug.\n");
+@@ -1654,7 +1705,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilitiesEx(DWORD unk, DWORD index, D
+         caps->Capabilities.Vibration.wRightMotorSpeed = 0xff;
+ 
+         caps->VersionNumber = attr.VersionNumber;
+-        if (controllers[index].hid.is_sony_gamepad)
++        if (controllers[index].hid.is_sony_gamepad && !controllers[index].hid.mythix_rumble_only)
+         {
+             caps->Capabilities.Type = XINPUT_DEVTYPE_GAMEPAD;
+             caps->VendorId = 0x045e;

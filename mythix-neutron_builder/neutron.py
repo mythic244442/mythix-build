@@ -175,8 +175,10 @@ BUILD_PROFILES = {
         },
     ),
     # Mythix Neutron 11.x: Valve bleeding-edge + GE (incl. GE's Wayland work)
-    # + TkG + Mythix patches, classic multilib. Valve's tree carries ntsync
-    # alongside esync/fsync; the launcher still checks the build + kernel.
+    # + TkG + Mythix patches. 11.11 is a classic multilib build, 11.19+ the
+    # WoW64 (Proton) layout; build-info BUILD_MODE says which. Valve's tree
+    # carries ntsync alongside esync/fsync; the launcher still checks the
+    # build + kernel.
     "mythix-neutron-11": dict(
         description="Mythix Neutron 11.x (Valve bleeding-edge + GE + TkG)",
         wine_tree="proton",
@@ -274,6 +276,25 @@ def append_to_env(env, var, value, sep):
 
 def nonzero(s):
     return len(s) > 0 and s != "0"
+
+
+def steam_client_running():
+    """True when the Linux Steam client is up: its pid file names a live
+    `steam` process. Inside a container that hides host PIDs this is False,
+    which keeps launches on the direct path."""
+    home = os.environ.get("HOME", "")
+    for pid_file in (os.path.join(home, ".steam", "steam.pid"),
+                     os.path.join(home, ".steampid")):
+        try:
+            with open(pid_file) as f:
+                pid = int(f.read().strip() or "0")
+            with open(f"/proc/{pid}/comm") as f:
+                comm = f.read().strip()
+        except (OSError, ValueError):
+            continue
+        if pid > 0 and comm.startswith("steam"):
+            return True
+    return False
 
 
 def file_exists(path, *, follow_symlinks):
@@ -542,6 +563,22 @@ class Neutron:
         # Serializes template creation across concurrent launches
         self.dist_lock = FileLock(os.path.join(neutron_dir, "dist.lock"))
 
+    # — what this build's xinput understands (read from the DLL itself, so a
+    #   hand-swapped xinput is reported as what it is) —
+    def xinput_features(self):
+        if getattr(self, "_xinput_features", None) is None:
+            data = b""
+            try:
+                with open(os.path.join(self.pe_system32, "xinput1_3.dll"), "rb") as f:
+                    data = f.read()
+            except OSError:
+                pass
+            self._xinput_features = {
+                "sony_auto": b"PROTON_SONY_AUTO_XINPUT" in data,   # GE Sony stack
+                "glyphs": b"MYTHIX_DS4_GLYPHS" in data,            # Mythix native mode
+            }
+        return self._xinput_features
+
     # — tool version (first line of the bundle's version file) —
     def tool_version(self):
         try:
@@ -782,9 +819,8 @@ class CompatData:
         steam_dir = "drive_c/Program Files (x86)/Steam/"
         makedirs(os.path.join(self.prefix, steam_dir))
         legacy = os.path.join(self.steam_root, "legacycompat")
-        # steamclient{,64}.dll deliberately excluded — Valve's native
-        # builds cause an ABI mismatch with Wine's lsteamclient.dll thunk,
-        # crashing titles like Cyberpunk 2077 with an access violation.
+        # steamclient{,64}.dll are not part of the overlay: see
+        # _ensure_steamclient_dlls (steam.exe launches only).
         copies = [
             ("GameOverlayRenderer64.dll", "GameOverlayRenderer64.dll"),
             ("GameOverlayRenderer.dll", "GameOverlayRenderer.dll"),
@@ -796,6 +832,36 @@ class CompatData:
             if os.path.isfile(src):
                 try_copy(src, steam_dir + dst_name, prefix=self.prefix,
                          track_file=track_file)
+
+    # — Steam's own steamclient{,64}.dll, for steam.exe launches —
+    def _ensure_steamclient_dlls(self):
+        """Valve's ntdll trampolines Steam's steamclient{,64}.dll into
+        lsteamclient, so they only work with an lsteamclient built for this
+        exact Wine (STEAM_BRIDGE=ge builds). With a mismatched one they crash
+        (the old Cyberpunk 2077 access violation). Installed per launch, only
+        when the launch goes through steam.exe, and refreshed after Steam
+        updates them."""
+        if not self.steam_root:
+            return
+        steam_dir = "drive_c/Program Files (x86)/Steam/"
+        legacy = os.path.join(self.steam_root, "legacycompat")
+        makedirs(os.path.join(self.prefix, steam_dir))
+        with open(self.tracked_files_file, "a") as tf:
+            for name in ("steamclient.dll", "steamclient64.dll"):
+                src = os.path.join(legacy, name)
+                dst = os.path.join(self.prefix, steam_dir, name)
+                try:
+                    s = os.stat(src)
+                except OSError:
+                    continue
+                try:
+                    d = os.stat(dst)
+                    if d.st_size == s.st_size and int(d.st_mtime) == int(s.st_mtime):
+                        continue
+                except OSError:
+                    pass
+                try_copy(src, steam_dir + name, prefix=self.prefix,
+                         track_file=tf)
 
     # — bundled Direct3D translation layers (tracked) —
     def _read_translation_manifest(self):
@@ -1199,6 +1265,8 @@ class CompatData:
                 f.write(CURRENT_PREFIX_VERSION + "\n")
 
             # cheap per-launch wiring
+            if session.use_steam_shim and session.steam_bridge:
+                self._ensure_steamclient_dlls()
             self._setup_drives(session)
             self._setup_openvr(session)
             self._write_timestamp(n)
@@ -1459,6 +1527,60 @@ class Session:
         self.use_wow64 = (os.environ.get("NEUTRON_USE_WOW64", "0") == "1")
         self.nvidia_wine_dll_dir = find_nvidia_wine_dll_dir()
         self.use_wayland, self.wayland_reason = self._decide_wayland()
+        # lsteamclient + steam.exe built with this Wine → Proton's Steam model
+        self.steam_bridge = self.neutron.build_info.get("STEAM_BRIDGE") == "ge"
+        self.use_steam_shim, self.steam_shim_reason = self._decide_steam_shim()
+        self.sony_mode = "build default"   # set by _apply_sony_input_env
+
+    # — Proton's steam.exe helper: per-launch decision —
+    def _decide_steam_shim(self):
+        """-> (use, reason). steam.exe registers the Steam client for the game
+        (lsteamclient's steamclient_init_registry). That only makes sense for a
+        real Steam app while the Steam client is up, so launches with a
+        launcher-made id (e.g. the Mythix Launcher's hex ids for non-Steam
+        games) or without Steam go straight to the game.
+        NEUTRON_USE_STEAM_SHIM=1 forces it, =0 disables it."""
+        knob = os.environ.get("NEUTRON_USE_STEAM_SHIM", "auto")
+        if knob == "0":
+            return False, "off (NEUTRON_USE_STEAM_SHIM=0)"
+        if knob == "1":
+            return True, "forced (NEUTRON_USE_STEAM_SHIM=1)"
+        if not self.steam_bridge:
+            return False, "build has no Steam bridge"
+        appid = self.env.get("SteamGameId") or self.env.get("SteamAppId") or ""
+        if not (appid.isascii() and appid.isdigit() and int(appid) > 0):
+            return False, f"no Steam app id ({appid or 'unset'}): direct launch"
+        if not steam_client_running():
+            return False, "Steam client not running: direct launch"
+        return True, f"Steam app {appid}"
+
+    # — DualShock 4 / DualSense —
+    def _apply_sony_input_env(self):
+        """Builds whose xinput carries GE's Sony stack: by default a Sony pad is
+        also an XInput controller (PROTON_SONY_AUTO_XINPUT=1, GE-Proton's own
+        default) that steps aside when a game reads it natively or Steam Input
+        owns it. MYTHIX_DS4_GLYPHS=1 is native PlayStation mode: the pad stays
+        out of XInputGetState, so PlayStation-aware games read it over HID
+        (PS glyphs), while XInputSetState still rumbles it."""
+        env = self.env
+        feats = self.neutron.xinput_features()
+        native = env.get("MYTHIX_DS4_GLYPHS", "")[:1] == "1"
+        if not feats["sony_auto"]:
+            self.sony_mode = ("native PlayStation (MYTHIX_DS4_GLYPHS=1)"
+                              if native and feats["glyphs"] else "build default")
+            return
+        if "PROTON_SONY_AUTO_XINPUT" in env:
+            self.sony_mode = ("PROTON_SONY_AUTO_XINPUT="
+                              f"{env['PROTON_SONY_AUTO_XINPUT']} (set by you)")
+        elif native:
+            self.sony_mode = ("native PlayStation (MYTHIX_DS4_GLYPHS=1): "
+                              "input + glyphs over HID, rumble via XInput")
+            if not feats["glyphs"]:
+                self.sony_mode += " (this xinput lacks the Mythix patch)"
+        else:
+            env["PROTON_SONY_AUTO_XINPUT"] = "1"
+            self.sony_mode = ("XInput fallback (PROTON_SONY_AUTO_XINPUT=1), "
+                              "native takeover")
 
     # — native Wayland driver (winewayland) selection —
     def _decide_wayland(self):
@@ -1741,6 +1863,9 @@ class Session:
         # Display driver (native Wayland vs X11/XWayland)
         self._apply_wayland_env()
 
+        # DualShock 4 / DualSense: XInput fallback vs native PlayStation mode
+        self._apply_sony_input_env()
+
         # DXVK defaults
         if self.use_nvapi:
             env.setdefault("DXVK_ENABLE_NVAPI", "1")
@@ -1844,6 +1969,10 @@ class Session:
             if os.path.isfile(os.path.join(n.vkd3d_dir, "x86_64-windows",
                                            dll + ".dll")):
                 overrides[dll] = style
+
+        # Proton's steam.exe helper (registers the Steam client for the game)
+        if self.steam_bridge:
+            overrides["steam.exe"] = "b"
 
         # Native Wayland driver: make sure it isn't disabled by a stale override
         if self.use_wayland:
@@ -1991,13 +2120,9 @@ class Session:
         use_steam_shim = (
             steam_exe and os.path.exists(steam_exe)
             and exe_name != "steam.exe"
-            and os.environ.get("NEUTRON_USE_STEAM_SHIM") == "1")
+            and self.use_steam_shim)
 
-        if use_start_wait:
-            log(f"using start /wait mode ({exe_name})")
-            debug("Launch mode", mode="wine start /wait")
-            cmd = [runner, "start", "/wait", "/unix"] + args
-        elif use_steam_shim:
+        if use_steam_shim:
             log("launching through steam.exe shim")
             debug("Launch mode", mode="Steam shim")
             win_args = []
@@ -2007,6 +2132,10 @@ class Session:
                 else:
                     win_args.append(a)
             cmd = [runner, "c:\\windows\\system32\\steam.exe"] + win_args
+        elif use_start_wait:
+            log(f"using start /wait mode ({exe_name})")
+            debug("Launch mode", mode="wine start /wait")
+            cmd = [runner, "start", "/wait", "/unix"] + args
         else:
             debug("Launch mode", mode="Direct Wine")
             cmd = [runner] + args
@@ -2153,6 +2282,18 @@ class Session:
             kv("build-info", "  ".join(f"{k}={bi[k]}" for k in
                                        ("PROFILE", "BUILD_MODE", "WAYLAND", "SOURCE")
                                        if bi.get(k)))
+        kv("steam bridge",
+           "lsteamclient + steam.exe built with this Wine (Proton Steam model)"
+           if self.steam_bridge else
+           "not built with this Wine — steamclient DLLs not installed")
+        kv("steam.exe launch",
+           ("yes" if self.use_steam_shim else "no") + f" — {self.steam_shim_reason}")
+        xi = n.xinput_features()
+        kv("sony controllers", self.sony_mode)
+        kv("xinput", ", ".join(
+            [name for name, on in (("GE Sony stack", xi["sony_auto"]),
+                                   ("Mythix native mode", xi["glyphs"])) if on]
+            ) or "stock (no Sony handling)")
         kv("display driver",
            ("wayland" if self.use_wayland else
             env.get("WINE_GRAPHICS_DRIVER", "build default"))

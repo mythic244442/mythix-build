@@ -425,6 +425,18 @@ msg2 "Build log   : ${BUILD_LOG}"
     err "configure not found or not executable at: ${WINE_SOURCE_DIR}/configure
      Has autoreconf been run? neutron-builder.sh runs it automatically."
 
+# Newer Valve loaders (66ee546 from 2026-09-11 and the 11.19 pin; not the 11.11
+# pin from 2026-07-16) run 32-bit processes through i386-unix/wine64-preloader,
+# which only the wow64 layout installs. A classic build of such a tree compiles
+# fine and then fails at the first 32-bit process, so refuse it up front.
+if [ "$NEUTRON_BUILD_MODE" = "classic" ] && [ "$SKIP_32BIT" != "true" ] && \
+   grep -q 'i386-unix/wine64-preloader' "${WINE_SOURCE_DIR}/dlls/ntdll/unix/loader.c" 2>/dev/null; then
+    err "This Wine tree needs --build-mode wow64.
+     Its loader starts 32-bit processes through i386-unix/wine64-preloader, which
+     a classic build doesn't install (11.19-1 failed this way:
+     \"failed to load i386-windows/ntdll.dll error 4000000e\")."
+fi
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  MinGW cross-compiler validation
 #  --with-mingw is mandatory for Proton; fail early with a clear message if
