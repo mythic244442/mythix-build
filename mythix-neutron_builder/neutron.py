@@ -278,6 +278,74 @@ def nonzero(s):
     return len(s) > 0 and s != "0"
 
 
+def in_container():
+    """True when running inside a pressure-vessel container (SteamLinuxRuntime)."""
+    return (os.environ.get("PRESSURE_VESSEL_RUNTIME") is not None
+            or os.path.isfile("/.flatpak-info"))
+
+
+def find_slr():
+    """Find a Steam Linux Runtime installation for container self-wrapping.
+    Returns (slr_dir, label) or (None, None)."""
+    steam_common = None
+    for base in (os.path.expanduser("~/.steam/debian-installation"),
+                 os.path.expanduser("~/.steam/steam"),
+                 os.path.expanduser("~/.local/share/Steam")):
+        candidate = os.path.join(base, "steamapps", "common")
+        if os.path.isdir(candidate):
+            steam_common = candidate
+            break
+    if not steam_common:
+        return None, None
+
+    preference = os.environ.get("NEUTRON_CONTAINER", "auto")
+    if preference == "none":
+        return None, None
+
+    candidates = []
+    if preference in ("auto", "slr4", "4"):
+        d = os.path.join(steam_common, "SteamLinuxRuntime_4")
+        if os.path.isfile(os.path.join(d, "run")):
+            candidates.append((d, "SLR 4.0"))
+    if preference in ("auto", "sniper", "3"):
+        d = os.path.join(steam_common, "SteamLinuxRuntime_sniper")
+        if os.path.isfile(os.path.join(d, "run")):
+            candidates.append((d, "Sniper (SLR 3.0)"))
+    if preference in ("auto", "soldier", "2"):
+        d = os.path.join(steam_common, "SteamLinuxRuntime_soldier")
+        if os.path.isfile(os.path.join(d, "run")):
+            candidates.append((d, "Soldier (SLR 2.0)"))
+
+    if preference not in ("auto", "none") and not candidates:
+        for name, label in (("SteamLinuxRuntime_4", "SLR 4.0"),
+                            ("SteamLinuxRuntime_sniper", "Sniper (SLR 3.0)")):
+            d = os.path.join(steam_common, name)
+            if os.path.isfile(os.path.join(d, "run")):
+                candidates.append((d, label))
+                break
+
+    return candidates[0] if candidates else (None, None)
+
+
+def container_self_wrap():
+    """Re-exec neutron inside a pressure-vessel container. Called once from
+    main() when we detect we're outside a container. Uses the SLR 'run'
+    script which handles all the pressure-vessel setup."""
+    if os.environ.get("NEUTRON_NO_CONTAINER") == "1":
+        return False
+
+    slr_dir, label = find_slr()
+    if not slr_dir:
+        return False
+
+    run_script = os.path.join(slr_dir, "run")
+    log(f"self-wrapping through {label} container ({slr_dir})")
+
+    script_path = os.path.realpath(__file__)
+    cmd = [run_script, "--", sys.executable, script_path] + sys.argv[1:]
+    os.execv(run_script, cmd)
+
+
 def steam_client_running():
     """True when the Linux Steam client is up: its pid file names a live
     `steam` process. Inside a container that hides host PIDs this is False,
@@ -684,7 +752,13 @@ class Neutron:
                 env["WINEBOOT"] = self.wineboot
                 env["WINESERVER"] = self.wineserver
                 env["PATH"] = self.bin_dir + ":" + os.environ.get("PATH", "")
-                env["LD_LIBRARY_PATH"] = self.lib_dir
+                # Our libs first, then whatever we inherited: inside a Steam
+                # Linux Runtime container that's pressure-vessel's paths plus
+                # host libraries the launcher bridged in (Mythix Launcher's
+                # MYTHIX_RUNTIME_LIBRARY_PATH) — without them wineboot can't
+                # load ntdll.so there and template creation dies.
+                env["LD_LIBRARY_PATH"] = ":".join(
+                    p for p in (self.lib_dir, os.environ.get("LD_LIBRARY_PATH", "")) if p)
                 env["WINEDEBUG"] = "-all"
                 makedirs(temp)
                 log(f"creating default prefix template ({temp})")
@@ -2406,6 +2480,16 @@ class Session:
             kv("tracked files", tracked)
         kv("steam root", cd.steam_root or "(unset)")
 
+        section("container")
+        containerized = in_container()
+        kv("in container", "yes" if containerized else "no")
+        kv("PRESSURE_VESSEL_RUNTIME",
+           os.environ.get("PRESSURE_VESSEL_RUNTIME", "(unset)"))
+        kv("PRESSURE_VESSEL_RUNTIME_BASE",
+           os.environ.get("PRESSURE_VESSEL_RUNTIME_BASE", "(unset)"))
+        kv("STEAM_RUNTIME",
+           os.environ.get("STEAM_RUNTIME", "(unset)"))
+
         section("wrappers & runtimes")
         kv("gamemode", "will wrap" if self.gamemode_wrap else "no")
         kv("gamemoderun", shutil.which("gamemoderun") or "(not found)")
@@ -2442,6 +2526,12 @@ def main():
 
     if not neutron.has_wine():
         die(f"Wine binary not found: {neutron.wine}")
+
+    if in_container():
+        runtime = os.environ.get("PRESSURE_VESSEL_RUNTIME", "unknown")
+        log(f"running inside container (runtime: {runtime})")
+    else:
+        container_self_wrap()
 
     if len(sys.argv) < 2:
         die("Usage: neutron <verb> [args...]")

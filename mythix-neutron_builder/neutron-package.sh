@@ -90,23 +90,61 @@ ok "compatibilitytool.vdf written"
 #  The %verb% token is replaced by Steam at runtime with the action to perform
 #  (run, waitforexitandrun, runinprefix, etc.).
 #
-#  When SNIPER_MODE=true, we add "require_tool_appid" "1391110" which tells
-#  Steam to run this tool inside the Steam Linux Runtime Sniper container
-#  (SteamOS 3.x isolation). Without it, the tool runs directly on the host.
+#  When CONTAINER_MODE is set, we add "require_tool_appid" which tells
+#  Steam to run this tool inside a Steam Linux Runtime container.
+#  Without it, the tool runs directly on the host.
+#
+#  Values: "slr4" (SLR 4.0, appid 4183110) — default for Wine 11+
+#          "sniper" (SLR 3.0, appid 1628350) — for Wine 10.x builds
+#          "soldier" (SLR 2.0, appid 1391110)
+#          "none" — no container, bare host mode
+#
+#  Legacy: SNIPER_MODE=true is equivalent to CONTAINER_MODE=sniper.
 # ══════════════════════════════════════════════════════════════════════════════
 sep "Writing toolmanifest.vdf"
-if [ "${SNIPER_MODE:-false}" = "true" ]; then
-    cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << 'EOF'
+
+# Resolve legacy flag
+if [ "${SNIPER_MODE:-}" = "true" ] && [ -z "${CONTAINER_MODE:-}" ]; then
+    CONTAINER_MODE="sniper"
+fi
+CONTAINER_MODE="${CONTAINER_MODE:-slr4}"
+
+case "${CONTAINER_MODE}" in
+    slr4|4)
+        _CONTAINER_APPID="4183110"
+        _CONTAINER_LABEL="SLR 4.0 (Steam Linux Runtime 4.0)"
+        ;;
+    sniper|3)
+        _CONTAINER_APPID="1628350"
+        _CONTAINER_LABEL="Sniper (Steam Linux Runtime 3.0)"
+        ;;
+    soldier|2)
+        _CONTAINER_APPID="1391110"
+        _CONTAINER_LABEL="Soldier (Steam Linux Runtime 2.0)"
+        ;;
+    none|false)
+        _CONTAINER_APPID=""
+        _CONTAINER_LABEL="host (no container)"
+        ;;
+    *)
+        warn "Unknown CONTAINER_MODE '${CONTAINER_MODE}', defaulting to SLR 4.0"
+        _CONTAINER_APPID="4183110"
+        _CONTAINER_LABEL="SLR 4.0 (Steam Linux Runtime 4.0)"
+        ;;
+esac
+
+if [ -n "${_CONTAINER_APPID}" ]; then
+    cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << EOF
 "manifest"
 {
   "version" "2"
   "commandline" "/neutron %verb%"
+  "require_tool_appid" "${_CONTAINER_APPID}"
   "use_sessions" "1"
-  "require_tool_appid" "1391110"
   "compatmanager_layer_name" "neutron"
 }
 EOF
-    ok "toolmanifest.vdf written (Sniper mode — Steam Runtime 3.0 container)"
+    ok "toolmanifest.vdf written (${_CONTAINER_LABEL} container)"
 else
     cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << 'EOF'
 "manifest"
@@ -117,7 +155,7 @@ else
   "compatmanager_layer_name" "neutron"
 }
 EOF
-    ok "toolmanifest.vdf written (standard host mode)"
+    ok "toolmanifest.vdf written (${_CONTAINER_LABEL})"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
