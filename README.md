@@ -11,6 +11,7 @@ overrides through a zenity-based GUI. Or do it all from the CLI.
 Now with a **Python frontend** — a Textual TUI, Tkinter GUI, and Click CLI that wrap
 the battle-tested shell engines with modern keyboard navigation, live build progress,
 and a tool catalogue.
+```
                      ____________________
                 _____   ..            .  _____
              ///.         .     .+            \\\
@@ -44,7 +45,7 @@ and a tool catalogue.
          | |\/| | \   /    | |  |  __  | | |   > <  
          | |  | |  | |     | |  | |  | |_| |_ / . \ 
          |_|  |_|  |_|     |_|  |_|  |_|_____/_/ \_\
-
+```
 ---
 
 ## Table of Contents
