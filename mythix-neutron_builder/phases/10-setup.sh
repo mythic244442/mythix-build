@@ -11,6 +11,11 @@ if [ -n "${_KRON4EK_REDIST_BUILD:-}" ]; then
 fi
 
 # ── Build profile (--profile) ────────────────────────────────────────────────
+# If no --profile and no --source were given, use the default profile
+if [ -z "$PROFILE_NAME" ] && [ -z "$WINE_SOURCE_KEY" ]; then
+    PROFILE_NAME="$DEFAULT_PROFILE"
+    msg "No --profile or --source given — using default profile: ${DEFAULT_PROFILE}"
+fi
 [ -z "$PROFILE_NAME" ] || _load_profile "$PROFILE_NAME"
 
 # Validate wine source key if provided
@@ -57,32 +62,45 @@ if [ -z "${VKD3D_SOURCE_URL[$VKD3D_SOURCE_KEY]+x}" ]; then
  Valid options: vkd3d-proton | none"
 fi
 
-# ── Steam Runtime Sniper mode ─────────────────────────────────────────────────
-# If not set via --sniper, ask interactively (skip inside container re-exec)
-if [ "$SNIPER_MODE" = "false" ] && [ -t 0 ] && [ "$CONTAINER_BUILD" != "false" ]; then
-    _sniper_items=(
-        $'no\tStandard mode — runs on host (broader compatibility)'
-        $'yes\tSniper mode — runs inside Steam Runtime 3.0 container (SteamOS-like isolation)'
+# ── Steam Runtime selection ───────────────────────────────────────────────────
+# Backwards compat: --sniper sets STEAM_RUNTIME=sniper (handled in CLI parser)
+# If not set via --runtime/--sniper or profile, ask interactively
+if [ -z "$STEAM_RUNTIME" ] && [ -t 0 ]; then
+    _rt_items=(
+        $'none\tStandard host mode — no container (broader compatibility)'
+        $'soldier\tSteam Linux Runtime 2.0 — Soldier (Proton 5–7 era)'
+        $'sniper\tSteam Linux Runtime 3.0 — Sniper (Proton 8+)'
+        $'slr4\tSteam Linux Runtime 4.0 — Heavy (default for Proton 11+)'
     )
     if command -v fzf >/dev/null 2>&1; then
-        _sniper_choice="$(printf '%s\n' "${_sniper_items[@]}" \
-            | fzf --prompt="Steam Runtime Sniper mode? " \
-                  --header="Enable Steam Runtime container isolation?" \
-                  --height=12% --reverse --delimiter=$'\t' --with-nth=2 \
+        STEAM_RUNTIME="$(printf '%s\n' "${_rt_items[@]}" \
+            | fzf --prompt="Steam Runtime > " \
+                  --header="Which Steam Runtime should the built package target?" \
+                  --height=14% --reverse --delimiter=$'\t' --with-nth=2 \
             | cut -f1)" || true
     else
-        printf "\n  ${C_B}Steam Runtime Sniper mode?${C_R}\n"
-        printf "    1) Standard mode — runs on host (broader compatibility)\n"
-        printf "    2) Sniper mode — Steam Runtime 3.0 container isolation\n"
-        read -rp "  Choice [1-2, default=1]: " _sniper_choice
-        case "$_sniper_choice" in
-            2) _sniper_choice="yes" ;;
-            *) _sniper_choice="no"  ;;
+        printf "\n  ${C_B}Steam Runtime target:${C_R}\n"
+        printf "    1) none     — Standard host mode (no container)\n"
+        printf "    2) soldier  — SLR 2.0 Soldier (Proton 5–7 era)\n"
+        printf "    3) sniper   — SLR 3.0 Sniper (Proton 8+)\n"
+        printf "    4) slr4     — SLR 4.0 Heavy (default for Proton 11+)\n"
+        read -rp "  Choice [1-4, default=1]: " _rt_pick
+        case "$_rt_pick" in
+            2) STEAM_RUNTIME="soldier" ;;
+            3) STEAM_RUNTIME="sniper" ;;
+            4) STEAM_RUNTIME="slr4" ;;
+            *) STEAM_RUNTIME="none" ;;
         esac
     fi
-    [ "$_sniper_choice" = "yes" ] && SNIPER_MODE=true
 fi
-msg2 "Sniper mode: ${SNIPER_MODE}"
+[ -n "$STEAM_RUNTIME" ] || STEAM_RUNTIME="none"
+# Validate
+if [ -z "${STEAM_RUNTIME_APPID[$STEAM_RUNTIME]+x}" ]; then
+    err "Unknown --runtime: '${STEAM_RUNTIME}' (use none, soldier, sniper, or slr4)"
+fi
+# Backwards compat: keep SNIPER_MODE in sync for any code still checking it
+[ "$STEAM_RUNTIME" = "sniper" ] && SNIPER_MODE=true || SNIPER_MODE=false
+msg2 "Steam Runtime: ${STEAM_RUNTIME} — ${STEAM_RUNTIME_LABEL[$STEAM_RUNTIME]}"
 
 # ── Build method (native vs container) ────────────────────────────────────────
 pick_build_method

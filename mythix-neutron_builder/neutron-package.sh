@@ -90,23 +90,28 @@ ok "compatibilitytool.vdf written"
 #  The %verb% token is replaced by Steam at runtime with the action to perform
 #  (run, waitforexitandrun, runinprefix, etc.).
 #
-#  When SNIPER_MODE=true, we add "require_tool_appid" "1391110" which tells
-#  Steam to run this tool inside the Steam Linux Runtime Sniper container
-#  (SteamOS 3.x isolation). Without it, the tool runs directly on the host.
+#  STEAM_RUNTIME selects the container isolation level:
+#    none    → no require_tool_appid (runs on host)
+#    soldier → 1391110 (SLR 2.0 — Proton 5–7 era)
+#    sniper  → 1628350 (SLR 3.0 — Proton 8+)
+#    slr4    → 4183110 (SLR 4.0 — Proton 11+)
 # ══════════════════════════════════════════════════════════════════════════════
 sep "Writing toolmanifest.vdf"
-if [ "${SNIPER_MODE:-false}" = "true" ]; then
-    cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << 'EOF'
+_rt="${STEAM_RUNTIME:-none}"
+_rt_appid="${STEAM_RUNTIME_APPID[$_rt]:-}"
+
+if [ -n "$_rt_appid" ]; then
+    cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" <<VDFEOF
 "manifest"
 {
   "version" "2"
   "commandline" "/neutron %verb%"
   "use_sessions" "1"
-  "require_tool_appid" "1391110"
+  "require_tool_appid" "${_rt_appid}"
   "compatmanager_layer_name" "neutron"
 }
-EOF
-    ok "toolmanifest.vdf written (Sniper mode — Steam Runtime 3.0 container)"
+VDFEOF
+    ok "toolmanifest.vdf written (${STEAM_RUNTIME_LABEL[$_rt]})"
 else
     cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << 'EOF'
 "manifest"
@@ -117,7 +122,7 @@ else
   "compatmanager_layer_name" "neutron"
 }
 EOF
-    ok "toolmanifest.vdf written (standard host mode)"
+    ok "toolmanifest.vdf written (standard host mode — no container)"
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════

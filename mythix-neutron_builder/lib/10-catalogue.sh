@@ -106,7 +106,22 @@ RESUME=false
 SKIP_WINE_BUILD=false      # set by --dxvk-only / --vkd3d-only
 SKIP_DXVK=false           # set by --vkd3d-only
 REINSTALL_COMPONENTS=false # set by --reinstall-components
-SNIPER_MODE=false          # set by --sniper (Steam Runtime Sniper container)
+SNIPER_MODE=false          # DEPRECATED — use STEAM_RUNTIME instead
+STEAM_RUNTIME=""           # none | soldier | sniper | slr4 ("" = ask or profile default)
+
+# Steam Runtime appid lookup (from Valve's toolmanifest files)
+declare -A STEAM_RUNTIME_APPID=(
+    [none]=""
+    [soldier]="1391110"
+    [sniper]="1628350"
+    [slr4]="4183110"
+)
+declare -A STEAM_RUNTIME_LABEL=(
+    [none]="Standard host mode (no container)"
+    [soldier]="Steam Linux Runtime 2.0 — Soldier (Proton 5–7 era)"
+    [sniper]="Steam Linux Runtime 3.0 — Sniper (Proton 8+)"
+    [slr4]="Steam Linux Runtime 4.0 — Heavy (default for Proton 11+)"
+)
 CONTAINER_BUILD=""         # "" = ask interactively; "true" = container; "false" = native
 DRY_RUN=0
 CUSTOM_CFG="${_CFG_DIR}/neutron-customization.cfg"
@@ -120,6 +135,7 @@ PATCH_GROUPS=""            # space-separated group names, "all", "none", or "" (
 
 # ── Build profiles (pinned, reproducible Mythix Wine recipes) ─────────────────
 PROFILES_DIR="${_LIB_DIR}/profiles"
+DEFAULT_PROFILE="mythix-11.19"  # used when no --profile and no --source given
 PROFILE_NAME=""            # --profile NAME|DIR  →  profiles/<name>/profile.conf
 PROFILE_DIR=""             # resolved by _load_profile
 NEUTRON_BUILD_MODE="${NEUTRON_BUILD_MODE:-}"  # --build-mode classic|wow64 ("" = per source)

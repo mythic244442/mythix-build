@@ -8,10 +8,22 @@
 # ══════════════════════════════════════════════════════════════════════════════
 _PROFILE_VARS=( PROFILE_DESC PROFILE_PIPELINE PROFILE_BUILD_MODE PROFILE_PACKAGE_NAME
                 PROFILE_VERSION_LABEL PROFILE_WAYLAND PROFILE_PATCH_GROUPS PROFILE_FFMPEG
-                PROFILE_STEAM_BRIDGE STEAM_BRIDGE_SKIP_PATCH_DIRS
+                PROFILE_STEAM_BRIDGE PROFILE_STEAM_RUNTIME STEAM_BRIDGE_SKIP_PATCH_DIRS
                 LEGACY_WINE_BASE PIN_WINE_REPO PIN_WINE_COMMIT PIN_TKG_COMMIT
                 PIN_STAGING_REPO PIN_STAGING_COMMIT PIN_STAGING_REF PIN_GE_REPO
                 PIN_GE_COMMIT PIN_FFMPEG_REPO PIN_FFMPEG_COMMIT TKG_SOURCE )
+
+# Profile aliases — friendly names for the tier system
+declare -A PROFILE_ALIASES=(
+    [stable]="mythix-11.11"
+    [latest]="mythix-11.19"
+    [experimental]="mythix-10.17"
+)
+
+_resolve_profile_alias() {
+    local p="$1"
+    printf '%s' "${PROFILE_ALIASES[$p]:-$p}"
+}
 
 _resolve_profile_dir() {
     local p="$1"
@@ -41,11 +53,20 @@ _list_profiles() {
         )
     done
     [ "$found" = "true" ] || msg2 "No profiles found."
+    if [ "${#PROFILE_ALIASES[@]}" -gt 0 ]; then
+        printf "\n  ${C_B}Aliases:${C_R}\n"
+        for alias in stable latest experimental; do
+            [ -n "${PROFILE_ALIASES[$alias]:-}" ] && \
+                printf "    ${C_CYN}%-14s${C_R} → %s\n" "$alias" "${PROFILE_ALIASES[$alias]}"
+        done
+    fi
+    printf "\n  ${C_B}Default:${C_R} %s  (used when no --profile or --source is given)\n" "$DEFAULT_PROFILE"
     printf "\n  Build one with:  %s --profile <name> [--container]\n\n" "$(basename "$0")"
 }
 
 _load_profile() {
-    PROFILE_DIR="$(_resolve_profile_dir "$1")" || \
+    local _resolved; _resolved="$(_resolve_profile_alias "$1")"
+    PROFILE_DIR="$(_resolve_profile_dir "$_resolved")" || \
         err "Unknown profile: '$1'
      Expected ${PROFILES_DIR}/$1/profile.conf (or a directory containing profile.conf).
      See: $(basename "$0") --list-profiles"
@@ -88,6 +109,7 @@ _load_profile() {
     [ -n "$BUILD_NAME" ]         || BUILD_NAME="$PROFILE_PACKAGE_NAME"
     [ -n "$PATCH_GROUPS" ]       || PATCH_GROUPS="${PROFILE_PATCH_GROUPS:-none}"
     [ -n "$NEUTRON_BUILD_MODE" ] || NEUTRON_BUILD_MODE="${PROFILE_BUILD_MODE:-classic}"
+    [ -n "$STEAM_RUNTIME" ]      || STEAM_RUNTIME="${PROFILE_STEAM_RUNTIME:-}"
 
     section "Profile: ${PROFILE_NAME}"
     msg  "${PROFILE_DESC:-}"
@@ -96,6 +118,8 @@ _load_profile() {
     msg2 "Package     : ${BUILD_NAME}"
     msg2 "Wayland     : $([ "${PROFILE_WAYLAND:-0}" = "1" ] && echo "on (launcher default)" || echo off)"
     msg2 "Patch groups: ${PATCH_GROUPS}"
+    [ -n "${STEAM_RUNTIME:-}" ] && [ "$STEAM_RUNTIME" != "none" ] && \
+        msg2 "Runtime     : ${STEAM_RUNTIME} (${STEAM_RUNTIME_LABEL[$STEAM_RUNTIME]:-})"
     [ "${PROFILE_FFMPEG:-none}" != "none" ] && msg2 "FFmpeg      : ${PROFILE_FFMPEG} (winedmo media backend)"
     [ "${PROFILE_STEAM_BRIDGE:-none}" != "none" ] && msg2 "Steam bridge: lsteamclient + steam.exe from ${PROFILE_STEAM_BRIDGE} source"
     ok "Profile loaded: ${PROFILE_DIR}"

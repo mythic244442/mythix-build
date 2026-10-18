@@ -20,7 +20,9 @@ ${C_B}Build profiles (pinned Mythix Wine recipes):${C_R}
   --profile NAME        Build a pinned profile from profiles/NAME (or a profile dir).
                         Sets --source mythix-wine, the package name, build mode and
                         patch groups; every upstream input is pinned + source-locked.
-  --list-profiles       Show the available profiles
+                        Aliases: stable (11.11) | latest (11.19) | experimental (10.17)
+                        Default: mythix-11.19 (used when no --profile or --source given)
+  --list-profiles       Show the available profiles and aliases
   --build-mode MODE     classic (wine64 + 32-bit tree) | wow64 (unified)
                         Default: the profile's mode; mythix-wine → classic; others → wow64
   --allow-patch-failures  Keep going when a profile patch layer fails (for re-curating)
@@ -63,7 +65,10 @@ ${C_B}Build options:${C_R}
                         Interactive picker if omitted. Groups: ntsync, performance,
                         fullscreen-hack, mouse-fixes, game-fixes, media-foundation
   --patches-dir PATH    Alternate patches directory (default: alongside this script)
-  --sniper              Enable Steam Runtime Sniper mode (container isolation)
+  --runtime RT          Steam Runtime for the built package:
+                        none (host) | soldier (SLR 2.0) | sniper (SLR 3.0) | slr4 (SLR 4.0)
+                        Default: picked interactively, or set by the profile.
+  --sniper              Shorthand for --runtime sniper
 
 ${C_B}General:${C_R}
   --list                Show all installed Neutron builds
@@ -71,9 +76,12 @@ ${C_B}General:${C_R}
   -h | --help           Show this help
 
 ${C_B}Examples:${C_R}
+  $0                                          # default profile (mythix-11.19)
+  $0 --profile latest --container             # same as above, explicit alias
+  $0 --profile stable                         # mythix-11.11 (safety net)
+  $0 --profile experimental                   # mythix-10.17 (frozen esync/fsync)
   $0 --profile mythix-11.19 --container       # Mythix Wine 11.19 (Wayland-first), pinned
   $0 --profile mythix-10.17 --container       # rebuild the frozen 10.17 esync/fsync build
-  $0                                          # interactive source + version menu
   $0 --source mainline                        # WineHQ stable (version picker)
   $0 --source staging                         # WineHQ + staging patches (version picker)
   $0 --source experimental                    # WineHQ bleeding-edge master
@@ -145,7 +153,8 @@ while [ "$#" -gt 0 ]; do
         --cfg)          CUSTOM_CFG="$2";         shift 2 ;;
         --patches)      PATCH_GROUPS="$2";       shift 2 ;;
         --patches-dir)  PATCHES_DIR="$2";        shift 2 ;;
-        --sniper)       SNIPER_MODE=true;        shift   ;;
+        --runtime)      STEAM_RUNTIME="$2";      shift 2 ;;
+        --sniper)       STEAM_RUNTIME="sniper";  shift   ;;
         --dry-run)      DRY_RUN=1;               shift   ;;
         --list)         _LIST_MODE=true;         shift   ;;
         -h|--help)      print_usage; exit 0               ;;

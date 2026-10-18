@@ -716,10 +716,10 @@ print_summary() {
     else
         printf "    ${C_YLW}◌${C_R}  VKD3D-Proton  — will compile from source\n"
     fi
-    if [ "${SNIPER_MODE}" = "true" ]; then
-        printf "    ${C_GRN}✓${C_R}  Sniper mode   — Steam Runtime 3.0 container isolation enabled\n"
+    if [ -n "${STEAM_RUNTIME:-}" ] && [ "$STEAM_RUNTIME" != "none" ]; then
+        printf "    ${C_GRN}✓${C_R}  Runtime       — %s\n" "${STEAM_RUNTIME_LABEL[$STEAM_RUNTIME]}"
     else
-        printf "    ${C_DIM}-${C_R}  Sniper mode   — disabled (standard host mode)\n"
+        printf "    ${C_DIM}-${C_R}  Runtime       — standard host mode (no container)\n"
     fi
     if [ -s "${BUILD_RUN_DIR:-/dev/null}/neutron-patch.manifest" ]; then
         local _pcount _pgroups

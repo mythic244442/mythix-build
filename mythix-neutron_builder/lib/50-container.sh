@@ -181,7 +181,7 @@ _run_container_build() {
     [ "$RESUME" = "true" ]           && inner_args+=( "--resume" )
     [ "$NO_PULL" = "true" ]          && inner_args+=( "--no-pull" )
     [ "$DRY_RUN" -eq 1 ]            && inner_args+=( "--dry-run" )
-    [ "$SNIPER_MODE" = "true" ]      && inner_args+=( "--sniper" )
+    [ -n "$STEAM_RUNTIME" ] && [ "$STEAM_RUNTIME" != "none" ] && inner_args+=( "--runtime" "$STEAM_RUNTIME" )
     [ -n "$PATCH_GROUPS" ]           && inner_args+=( "--patches" "$PATCH_GROUPS" )
     [ -n "$NEUTRON_BUILD_MODE" ]     && inner_args+=( "--build-mode" "$NEUTRON_BUILD_MODE" )
     [ "$ALLOW_PATCH_FAILURES" = "true" ] && inner_args+=( "--allow-patch-failures" )
