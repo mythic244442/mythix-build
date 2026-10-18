@@ -21,6 +21,9 @@ set -euo pipefail
 IFS=$'\n\t'
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+# Real main script — BASH_SOURCE[0] inside sourced lib/ modules is the module
+# file, not this script; the container handoff must mount THIS file.
+_MAIN_SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Path resolution — works from both the source tree and after `make install`

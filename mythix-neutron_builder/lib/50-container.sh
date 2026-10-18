@@ -235,7 +235,7 @@ _run_container_build() {
     # (as "neutron-builder", no .sh) while helpers live in lib/.  The file
     # bind mount adds it into the directory mount so both are visible.
     local _self
-    _self="$(readlink -f "${BASH_SOURCE[0]}")"
+    _self="${_MAIN_SCRIPT:?main script path not set}"
 
     # ── Config file mount ──────────────────────────────────────────────
     # Inside the container _CFG_DIR resolves to ~/.config/mythix-build,
