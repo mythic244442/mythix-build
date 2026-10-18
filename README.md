@@ -46,7 +46,6 @@ and a tool catalogue.
          | |\/| | \   /    | |  |  __  | | |   > <
          | |  | |  | |     | |  | |  | |_| |_ / . \
          |_|  |_|  |_|     |_|  |_|  |_|_____/_/ \_\
-                mythix-build v1.0.0
 ```
 
 > **Note on the command examples below:** every command is in its own code block so
