@@ -25,7 +25,7 @@ Explicit flags still win over the profile: `--name`, `--patches` and `--build-mo
 
 | Profile | Pipeline | Mode | Package | What it is |
 |---|---|---|---|---|
-| `mythix-11.19` | `ge` | wow64 | `Mythix-Neutron-11.19-4` | Valve bleeding-edge + GE (incl. Wayland) + curated TkG 11.19 + DS4. Wayland-first. |
+| `mythix-11.19` | `patch` | wow64 | `Mythix-Neutron-11.19-4` | Valve bleeding-edge + GE (incl. Wayland) + curated TkG 11.19 + DS4. Wayland-first. |
 | `mythix-11.11` | `legacy` | classic | `Mythix-Neutron-11.11-2` | Safety net. A *reconstructed* recipe of the last X11-first bleeding-edge build. |
 | `mythix-10.17` | `legacy` | classic | `Mythix-Neutron-10.17-2` | **Frozen.** The esync/fsync build on Valve proton_10.0. Never edit it. |
 
@@ -47,7 +47,7 @@ profiles/<name>/
 | Variable | Values | Meaning |
 |---|---|---|
 | `PROFILE_DESC` | text | One line shown by `--list-profiles` |
-| `PROFILE_PIPELINE` | `ge` \| `legacy` | Which source pipeline prepares the tree (see below) |
+| `PROFILE_PIPELINE` | `patch` \| `legacy` | Which source pipeline prepares the tree (see below) |
 | `PROFILE_BUILD_MODE` | `classic` \| `wow64` | `classic` = 64-bit tree + 32-bit tree (Wine 10.x bases, the 11.11 base). `wow64` = one unified `--enable-archs` tree + i386-unix drivers, Valve's Proton layout. Newer Valve loaders need `wow64`: the Neutron 11.0 base 66ee546 (2026-09-11) and the 11.19 pin do, the 11.11 pin (2026-07-16) doesn't. The builder refuses `classic` for such a tree |
 | `PROFILE_PACKAGE_NAME` | e.g. `Mythix-Neutron-11.19-1` | Package dir + version tag. The launcher picks its build profile and prefix schema from it |
 | `PROFILE_VERSION_LABEL` | e.g. `11.19` | Goes into `wine --version` (`wine-11.19-mythix.<base>`) |
@@ -78,7 +78,7 @@ Pins for the **legacy** pipeline:
 
 ## Pipelines
 
-### `ge` — `mythix-ge-pipeline.sh`
+### `patch` — `mythix-patch-pipeline.sh`
 
 Builds Mythix Wine on GE-Proton's tested patch stack:
 
@@ -91,14 +91,14 @@ Builds Mythix Wine on GE-Proton's tested patch stack:
 5. Version branding: `wine-<label>-mythix.<base>  ( Mythix Wine )`.
 6. Source lock: `<build-run>/mythix-source.lock`.
 
-Each layer is a commit (`mythix: …`) in `<src>/mythix-ge/wine`, so
+Each layer is a commit (`mythix: …`) in `<src>/mythix-patch/wine`, so
 `git log` / `git diff` show exactly what every layer did. Re-running starts from a
 clean checkout of the pins, so rebuilds are idempotent.
 
 You can run it standalone to prepare and inspect a tree without building:
 
 ```bash
-./mythix-ge-pipeline.sh --profile-dir profiles/mythix-11.19 --work-dir /tmp/mx --log-dir /tmp/mx/logs
+./mythix-patch-pipeline.sh --profile-dir profiles/mythix-11.19 --work-dir /tmp/mx --log-dir /tmp/mx/logs
 ```
 
 ### `legacy` — the original mythix-wine layer pipeline

@@ -28,7 +28,7 @@ and a tool catalogue.
 ⠀⠀⠀⣨⣟⡍⠉⠚⠹⣇⡄⠀⠀⠀⠀⠀⠀⠀⠀⠈⢦⠀⠀⢀⡀⣾⡇⠀⠀
 ⠀⠀⢠⠟⣹⣧⠃⠀⠀⢿⢻⡀⢄⠀⠀⠀⠀⠐⣦⡀⣸⣆⠀⣾⣧⣯⢻⠀⠀
 ⠀⠀⠘⣰⣿⣿⡄⡆⠀⠀⠀⠳⣼⢦⡘⣄⠀⠀⡟⡷⠃⠘⢶⣿⡎⠻⣆⠀⠀
-⠀⠀⠀⡟⡿⢿⡿⠀⠀⠀⠀⠀⠙⠀⠻⢯⢷⣼⠁⠁⠀⠀⠀⠀⠀⡄⡈⢆⠀
+⠀⠀⠀⡟⡿⢿⡿⠀⠀⠀⠀⠀⠙⠀⠻⢯⢷⣼⠁⠁⠀⠀⠀⠙⢿⡄⡈⢆⠀
 ⠀⠀⠀⠀⡇⣿⡅⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠦⠀⠀⠀⠀⠀⠀⡇⢹⢿⡀
 ⠀⠀⠀⠀⠁⠛⠓⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠼⠇⠁
                 mythix-build v1.0.0
@@ -1126,6 +1126,11 @@ mythix-build/
 │   ├── neutron-package.sh                      Steam package assembler (launcher, bootstrap,
 │   │                                           toolmanifest, dxvk.conf, Steam components)
 │   ├── neutron-patcher.sh                      Patch system engine (fzf multi-picker)
+│   ├── mythix-patch-pipeline.sh                Mythix patch pipeline (profile source prep)
+│   ├── lib/                                    Builder modules (catalogue, CLI, profiles,
+│   │                                           preflight, container, fetch, wine prep, pickers)
+│   ├── phases/                                 Pipeline phases (setup → fetch → patch →
+│   │                                           build wine → build components → package)
 │   ├── _output_common.sh                       → symlink to ../mythix-wine_builder/
 │   ├── dxvk.conf                               Shipped DXVK config (async, state cache)
 │   ├── vkd3d-proton.conf                       Shipped VKD3D-Proton config reference
