@@ -3,11 +3,14 @@
 **Wine & Neutron builders, delegated Proton builder, hybrid installer, GUI toolkit, and installers — all in one repo.**
 
 Build Wine from 10 upstream sources, compile full Neutron packages for Steam, build
-GE-Proton and proton-tkg using their own upstream build systems via a delegated install 
-inside a container running with podman, merge custom Wine over existing Proton 
-installs, manage installations with one-click switching, deploy builds and download 
-pre-built releases, and handle prefixes, DXVK, runtimes, and DLL overrides through a 
-zenity-based GUI. Or do it all from the CLI.
+GE-Proton and proton-tkg using their own upstream build systems, merge custom Wine
+over existing Proton installs, manage installations with one-click switching, deploy
+builds and download pre-built releases, and handle prefixes, DXVK, runtimes, and DLL
+overrides through a zenity-based GUI. Or do it all from the CLI.
+
+Now with a **Python frontend** — a Textual TUI, Tkinter GUI, and Click CLI that wrap
+the battle-tested shell engines with modern keyboard navigation, live build progress,
+and a tool catalogue.
 
 ```
                      ____________________
@@ -43,7 +46,12 @@ zenity-based GUI. Or do it all from the CLI.
          | |\/| | \   /    | |  |  __  | | |   > <
          | |  | |  | |     | |  | |  | |_| |_ / . \
          |_|  |_|  |_|     |_|  |_|  |_|_____/_/ \_\
+                mythix-build v1.0.0
 ```
+
+> **Note on the command examples below:** every command is in its own code block so
+> you can copy and paste them one at a time. Commands that take multiple flags are
+> still a single command — paste the whole block for those.
 
 ---
 
@@ -75,55 +83,176 @@ zenity-based GUI. Or do it all from the CLI.
 
 ## Quick Start
 
-```bash
-git clone https://github.com/mythic244442/mythix-build
-cd mythix-build
-make install            # installs to ~/.local (adds PATH to ~/.bashrc)
-source ~/.bashrc
+Clone the repo:
 
-mythix-build             # main menu — pick any tool
-wine-builder            # build Wine interactively
-neutron-builder         # build Neutron interactively
-proton-builder          # build GE-Proton or proton-tkg (delegated)
-proton-install          # download / deploy Proton packages
-neutron-install         # deploy locally-built Neutron packages
-wine_toolz              # open the GUI toolkit
-wine-proton_hybrid      # hybrid installer (Proton base)
-wine-neutron_hybrid     # hybrid installer (Neutron base)
+```bash
+git clone https://github.com/mythic244242/mythix-build
 ```
+
+Enter it:
+
+```bash
+cd mythix-build
+```
+
+Install to `~/.local` (also adds a `PATH` block to `~/.bashrc`):
+
+```bash
+make install
+```
+
+Reload your shell (first install only):
+
+```bash
+source ~/.bashrc
+```
+
+Then any of these — one per terminal:
+
+```bash
+mythix-build
+```
+```bash
+wine-builder
+```
+```bash
+neutron-builder
+```
+```bash
+proton-builder
+```
+```bash
+proton-install
+```
+```bash
+neutron-install
+```
+```bash
+wine_toolz
+```
+```bash
+wine-proton_hybrid
+```
+```bash
+wine-neutron_hybrid
+```
+
+(`mythix-build` is the main menu that can launch all of the above.)
 
 ### Python Quick Start
 
+Editable install with dev dependencies:
+
 ```bash
-make py-dev             # editable install (pip install -e .[dev])
-mythix                   # open the Textual TUI
-mythix --gui             # open the Tkinter GUI
-mythix launch wine_toolz # run a tool with full TTY handoff
-mythix list              # print the tool catalogue
-mythix doctor            # diagnose discovery + check what's found
+make py-dev
+```
+
+Open the Textual TUI:
+
+```bash
+mythix
+```
+
+Open the Tkinter GUI:
+
+```bash
+mythix --gui
+```
+
+Run a tool with full TTY handoff:
+
+```bash
+mythix launch wine_toolz
+```
+
+Print the tool catalogue:
+
+```bash
+mythix list
+```
+
+Diagnose discovery and check what's found:
+
+```bash
+mythix doctor
 ```
 
 ---
 
 ## Install
 
+User install to `~/.local` (default):
+
 ```bash
-make install                        # user install → ~/.local  (default)
-make install PREFIX=/usr/local      # system-wide  (needs sudo)
-make install DESTDIR=/tmp/pkg       # staged for packaging
+make install
 ```
 
-Selective install:
+System-wide (needs sudo):
 
 ```bash
-make install-neutron         # neutron_builder only
-make install-proton          # proton_builder only
-make install-wine            # wine_builder only
-make install-hybrid          # wine-proton hybrid_builder only
-make install-neutron-hybrid  # wine-neutron hybrid_builder only
-make install-neutron-install # neutron-install only
-make install-toolz           # winetoolz only
-make install-launcher        # mythix-build main menu only
+make install PREFIX=/usr/local
+```
+
+Staged for packaging:
+
+```bash
+make install DESTDIR=/tmp/pkg
+```
+
+### Selective install
+
+Neutron builder only:
+
+```bash
+make install-neutron
+```
+
+Proton builder only:
+
+```bash
+make install-proton
+```
+
+Wine builder only:
+
+```bash
+make install-wine
+```
+
+Wine–Proton hybrid builder only:
+
+```bash
+make install-hybrid
+```
+
+Wine–Neutron hybrid builder only:
+
+```bash
+make install-neutron-hybrid
+```
+
+neutron-install only:
+
+```bash
+make install-neutron-install
+```
+
+proton-install only:
+
+```bash
+make install-proton-install
+```
+
+winetoolz only:
+
+```bash
+make install-toolz
+```
+
+Mythix main-menu launcher only:
+
+```bash
+make install-launcher
 ```
 
 The installer adds a `PATH` block to `~/.bashrc` automatically. If `~/.local/bin`
@@ -131,29 +260,76 @@ is already in your `PATH`, it's skipped. Run `source ~/.bashrc` after first inst
 
 ### Python Frontend Install
 
+Editable install (`pip install -e .[dev]`):
+
 ```bash
-make py-dev             # editable install — pip install -e .[dev]
-make py-test            # run the test suite (pytest)
-make py-tui             # open the Textual TUI launcher
+make py-dev
 ```
 
-Or install directly with pip:
+Run the test suite:
 
 ```bash
-pip install -e .        # minimal: textual + click
-pip install -e ".[dev]" # adds pytest, pytest-asyncio, textual-dev
+make py-test
 ```
 
-After install, the `mythix` console script is available:
+Open the Textual TUI launcher:
 
 ```bash
-mythix                   # TUI launcher (default)
-mythix --gui             # Tkinter GUI launcher
-mythix launch <tool>     # run a tool with full TTY handoff
-mythix build <tool>      # run a tool with live progress screen
-mythix list              # print tool catalogue
-mythix doctor            # diagnose tool discovery
-mythix version           # print version
+make py-tui
+```
+
+Or install directly with pip — minimal (textual + click):
+
+```bash
+pip install -e .
+```
+
+With dev dependencies (pytest, pytest-asyncio, textual-dev):
+
+```bash
+pip install -e ".[dev]"
+```
+
+After install, the `mythix` console script is available. Open the TUI (default):
+
+```bash
+mythix
+```
+
+Open the Tkinter GUI:
+
+```bash
+mythix --gui
+```
+
+Run a tool with full TTY handoff:
+
+```bash
+mythix launch <tool>
+```
+
+Run a tool with the live progress screen:
+
+```bash
+mythix build <tool>
+```
+
+Print the tool catalogue:
+
+```bash
+mythix list
+```
+
+Diagnose tool discovery:
+
+```bash
+mythix doctor
+```
+
+Print the version:
+
+```bash
+mythix version
 ```
 
 ---
@@ -171,10 +347,22 @@ A full-featured terminal UI built with [Textual](https://github.com/Textualize/t
 Same wolf banner and tool list as the bash launcher, rendered with keyboard navigation,
 grouped categories, and a keybind footer.
 
+Open the TUI:
+
 ```bash
-mythix                   # open the TUI
-make py-tui             # same thing via Makefile
-python -m mythix_build_system   # same thing via Python module
+mythix
+```
+
+Same thing via Makefile:
+
+```bash
+make py-tui
+```
+
+Same thing via Python module:
+
+```bash
+python -m mythix_build_system
 ```
 
 **Keybindings:**
@@ -206,9 +394,16 @@ A graphical launcher window using Python's built-in Tkinter. Tools are grouped b
 category with colored headers and hover effects. Clicking a tool opens it in your
 terminal emulator.
 
+From the CLI:
+
 ```bash
-mythix --gui                 # from the CLI
-python -m mythix_build_system.gui   # direct module launch
+mythix --gui
+```
+
+Direct module launch:
+
+```bash
+python -m mythix_build_system.gui
 ```
 
 **Supported terminal emulators** (auto-detected in order):
@@ -222,15 +417,52 @@ A status bar at the bottom shows which terminal emulator was detected.
 A [Click](https://click.palletsprojects.com/)-based command-line interface for
 scripting and direct tool invocation without opening a TUI.
 
+Pretty-print the tool catalogue:
+
 ```bash
-mythix list                          # pretty-print the tool catalogue
-mythix list --format=keys            # one key per line (for scripting)
-mythix list --format=plain           # tab-separated key/path/blurb
-mythix launch wine-builder           # full TTY handoff
+mythix list
+```
+
+One key per line (for scripting):
+
+```bash
+mythix list --format=keys
+```
+
+Tab-separated key/path/blurb:
+
+```bash
+mythix list --format=plain
+```
+
+Full TTY handoff:
+
+```bash
+mythix launch wine-builder
+```
+
+Pass flags through to the tool (after `--`):
+
+```bash
 mythix launch neutron-builder -- --source proton-wine --branch proton_9.0
+```
+
+Live progress screen, non-interactive:
+
+```bash
 mythix build neutron-builder -- --dry-run
-mythix doctor                        # show repo root + tool resolution
-mythix version                       # print version string
+```
+
+Show repo root + tool resolution:
+
+```bash
+mythix doctor
+```
+
+Print the version string:
+
+```bash
+mythix version
 ```
 
 | Command | Description |
@@ -263,18 +495,70 @@ Set `$MYTHIX_ROOT` to explicitly point at a source checkout.
 Builds Wine from 10 upstream sources with full 32+64-bit cross-compile, ccache
 support, TKG patch integration, and automated staging application.
 
+Interactive source + version picker:
+
 ```bash
-wine-builder                            # interactive source + version picker
-wine-builder --source mainline          # upstream Wine (stable tags)
-wine-builder --source staging           # Wine-Staging (pre-patched)
-wine-builder --source tkg-patched       # mainline + staging patches (automated)
-wine-builder --source proton            # Valve proton-wine (branch picker)
-wine-builder --source kron4ek           # Kron4ek wine-tkg build
+wine-builder
+```
+
+Upstream Wine (stable tags):
+
+```bash
+wine-builder --source mainline
+```
+
+Wine-Staging (pre-patched):
+
+```bash
+wine-builder --source staging
+```
+
+Mainline + staging patches (automated):
+
+```bash
+wine-builder --source tkg-patched
+```
+
+Valve proton-wine (branch picker):
+
+```bash
+wine-builder --source proton
+```
+
+Kron4ek wine-tkg build:
+
+```bash
+wine-builder --source kron4ek
+```
+
+Any git repo:
+
+```bash
 wine-builder --source custom --url <git-url> --branch main
+```
+
+An existing local source tree:
+
+```bash
 wine-builder --source local --local-dir ~/my-wine-src
-wine-builder --resume                   # continue an interrupted build
-wine-builder --list                     # show completed builds
-wine-builder --uninstall                # remove a build (interactive picker)
+```
+
+Continue an interrupted build:
+
+```bash
+wine-builder --resume
+```
+
+Show completed builds:
+
+```bash
+wine-builder --list
+```
+
+Remove a build (interactive picker):
+
+```bash
+wine-builder --uninstall
 ```
 
 #### Wine Sources
@@ -327,29 +611,112 @@ tree with `bin/wine`, `lib/`, etc.
 ### 🎮 neutron-builder — mythix-neutron_builder
 
 Builds a complete **Neutron package** (a Steam-compatible Proton tool) from source: a Wine build
-(proton-wine, GE-Proton, or kron4ek-tkg) compiled with MinGW PE support, plus DXVK and
+(proton-wine, GE-Proton, Mythix Wine, or kron4ek-tkg) compiled with MinGW PE support, plus DXVK and
 VKD3D-Proton, all assembled into a Steam-loadable package. The result drops into
 `compatibilitytools.d/` and appears in Steam's per-game Compatibility dropdown —
 just like GE-Proton, but built locally from the sources you choose with the
 compiler flags you want.
 
+Build a pinned Mythix Wine profile (recommended — see below):
+
 ```bash
-neutron-builder --profile mythix-11.19 --container  # Mythix Wine 11.19 (pinned, Wayland-first)
-neutron-builder --list-profiles                  # pinned Mythix Wine recipes
-neutron-builder                                  # interactive wizard
-neutron-builder --source proton-wine             # Valve proton-wine (branch picker)
+neutron-builder --profile mythix-11.19 --container
+```
+
+List the pinned Mythix Wine recipes:
+
+```bash
+neutron-builder --list-profiles
+```
+
+Interactive wizard:
+
+```bash
+neutron-builder
+```
+
+Valve proton-wine (branch picker):
+
+```bash
+neutron-builder --source proton-wine
+```
+
+Valve proton-wine, pinned branch:
+
+```bash
 neutron-builder --source proton-wine --branch proton_9.0
-neutron-builder --source ge-proton               # GE-Proton — proton-wine + GE gaming patches
-neutron-builder --source kron4ek-tkg             # Kron4ek wine-tkg + ntsync
-neutron-builder --patches all                    # apply all patch groups
-neutron-builder --patches custom                 # apply specific groups
-neutron-builder --sniper                         # enable Steam Runtime Sniper container
-neutron-builder --dxvk dxvk                      # compile DXVK from source (instead of downloading)
-neutron-builder --vkd3d vkd3d-proton             # compile VKD3D-Proton from source
-neutron-builder --dxvk-only                      # rebuild DXVK only, skip Wine
-neutron-builder --vkd3d-only                     # rebuild VKD3D-Proton only
-neutron-builder --reinstall-components           # re-package without rebuilding
-neutron-builder --list                           # show installed Neutron builds
+```
+
+GE-Proton — proton-wine + GE gaming patches:
+
+```bash
+neutron-builder --source ge-proton
+```
+
+Kron4ek wine-tkg + ntsync:
+
+```bash
+neutron-builder --source kron4ek-tkg
+```
+
+Mythix Wine — Valve proton-wine + TkG + Staging + GE (the works):
+
+```bash
+neutron-builder --source mythix-wine
+```
+
+Apply all discovered patch groups:
+
+```bash
+neutron-builder --patches all
+```
+
+Apply specific groups:
+
+```bash
+neutron-builder --patches custom
+```
+
+Enable Steam Runtime Sniper container:
+
+```bash
+neutron-builder --sniper
+```
+
+Compile DXVK from source (instead of downloading):
+
+```bash
+neutron-builder --dxvk dxvk
+```
+
+Compile VKD3D-Proton from source:
+
+```bash
+neutron-builder --vkd3d vkd3d-proton
+```
+
+Rebuild DXVK only, skip Wine:
+
+```bash
+neutron-builder --dxvk-only
+```
+
+Rebuild VKD3D-Proton only:
+
+```bash
+neutron-builder --vkd3d-only
+```
+
+Re-package without rebuilding:
+
+```bash
+neutron-builder --reinstall-components
+```
+
+Show installed Neutron builds:
+
+```bash
+neutron-builder --list
 ```
 
 #### Mythix Wine profiles
@@ -375,6 +742,7 @@ See [`profiles/README.md`](mythix-neutron_builder/profiles/README.md).
 | `proton-wine-experimental` | Valve proton-wine experimental | Bleeding-edge, no picker |
 | `ge-proton` | GE-Proton (GloriousEggroll) | proton-wine + GE's full gaming patch set (version picker) |
 | `kron4ek-tkg` | Kron4ek wine-tkg | Mainline + Staging + TKG patches + ntsync |
+| `mythix-wine` | Mythix Wine | Valve proton-wine + TkG + Staging + GE (the works); base branch set with `--wine-base` |
 
 #### GE Neutron (GloriousEggroll)
 
@@ -401,9 +769,16 @@ to apply all patches, then compiles through the normal Neutron pipeline.
 **First successful build:** 95,182 lines compiled, 106 files patched, 576 x64 DLLs +
 572 x86 DLLs, 1.5 GB packaged — zero build errors.
 
+Interactive GE release picker:
+
 ```bash
-neutron-builder --source ge-proton                    # interactive GE release picker
-neutron-builder --source ge-proton --branch GE-Proton9-20  # pin to specific release
+neutron-builder --source ge-proton
+```
+
+Pin to a specific release:
+
+```bash
+neutron-builder --source ge-proton --branch GE-Proton9-20
 ```
 
 The resulting build appears in Steam as `mythix-ge-neutron-<version>`.
@@ -437,6 +812,7 @@ GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
 | `--allow-patch-failures` | Let profile patch layers fail (re-curation only) |
 | `--source NAME` | Wine source key |
 | `--branch BRANCH` | Pin proton-wine to a specific branch |
+| `--wine-base BASE` | Mythix Wine base branch: `proton_10.0` (default) \| `bleeding-edge` |
 | `--no-pull` | Skip `git pull` |
 | `--dxvk NAME` | DXVK variant (`dxvk-release` \| `dxvk` \| `dxvk-async` \| `none`) |
 | `--vkd3d NAME` | VKD3D variant (`vkd3d-proton-release` \| `vkd3d-proton` \| `none`) |
@@ -456,12 +832,18 @@ GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
 | `--dxvk-only` | Rebuild DXVK only (skip Wine) |
 | `--vkd3d-only` | Rebuild VKD3D-Proton only (skip Wine) |
 | `--reinstall-components` | Re-package without rebuilding |
+| `--container` | Build inside the neutron container image (Podman) |
+| `--no-container` | Build natively on the host, skip the container prompt |
+| `--kron4ek-redist BUILD_DIR [PKG_DIR]` | Maintenance: re-run the compat redist step against an existing build dir |
 | `--patches GROUPS` | Patch groups to apply (`all`, `none`, or comma-separated names) |
 | `--patches-dir PATH` | Alternate patches directory |
 | `--sniper` | Enable Steam Runtime Sniper mode (container isolation) |
 | `--cfg PATH` | Alternate `neutron-customization.cfg` |
 | `--list` | Show installed Neutron builds |
 | `--dry-run` | Print planned actions |
+
+Without `--container` / `--no-container`, the builder asks interactively whether
+to build in the container or natively.
 
 #### How neutron Works
 
@@ -600,13 +982,28 @@ automatically. The patch system below is for your own custom patches.
 Drop your own `.patch` files into `custom/` (or any new subdirectory) and the
 patcher auto-discovers them.
 
-**Usage:**
+**Usage** — apply everything discovered:
 
 ```bash
-neutron-builder --patches all                    # apply everything discovered
-neutron-builder --patches custom                 # apply only the custom group
-neutron-builder --patches none                   # skip patching
-neutron-builder                                  # interactive fzf multi-picker
+neutron-builder --patches all
+```
+
+Apply only the custom group:
+
+```bash
+neutron-builder --patches custom
+```
+
+Skip patching:
+
+```bash
+neutron-builder --patches none
+```
+
+Interactive fzf multi-picker:
+
+```bash
+neutron-builder
 ```
 
 **Adding patches:** Place `.patch` files in `patches/custom/` or create
@@ -683,8 +1080,8 @@ machine. Key knobs:
 | `CROSSCFLAGS` / `CROSSCXXFLAGS` | `-O3 -march=native -mtune=native` | Compiler flags for MinGW PE modules |
 
 The default `CFLAGS`/`CROSSCFLAGS` use `-O3 -march=native -mtune=native`. This
-gives a meaningful performance boost for Wine's hot paths over the default `-O2`, but
-the resulting binaries are tuned for your CPU and **should not be copied to a machine
+gives a meaningful performance boost for Wine's hot paths over the default `-O2`,
+but the resulting binaries are tuned for your CPU and **should not be copied to a machine
 with a different CPU family**. Remove `-march=native -mtune=native` if you need a
 portable build.
 
@@ -710,11 +1107,10 @@ It is a useful reference case because it exercises several things simultaneously
 
 #### Installing to Steam
 
-After a successful build:
+After a successful build, copy the package (single command — paste the whole block):
 
 ```bash
-cp -r ~/.local/share/mythix-neutron_builder/buildz/install/<name> \
-      ~/.steam/steam/compatibilitytools.d/
+cp -r ~/.local/share/mythix-neutron_builder/buildz/install/<name> ~/.steam/steam/compatibilitytools.d/
 ```
 
 Or use `neutron-install --deploy <path>` (see below) to copy and set permissions in
@@ -735,13 +1131,40 @@ compiled locally on your machine.
 Both GE-Proton and proton-tkg bring their own container environments (Podman or
 Docker), so the only hard dependencies are `git`, `curl`, and a container engine.
 
+Interactive menu (ge, tkg, list, clean):
+
 ```bash
-proton-builder                              # interactive menu (ge, tkg, list, clean)
-proton-builder --source ge                  # build latest GE-Proton
-proton-builder --source tkg                 # build proton-tkg
-proton-builder --list                       # show completed builds
-proton-builder --clean                      # remove source checkouts & intermediates
-proton-builder --dry-run --source ge        # preview GE-Proton build steps
+proton-builder
+```
+
+Build latest GE-Proton:
+
+```bash
+proton-builder --source ge
+```
+
+Build proton-tkg:
+
+```bash
+proton-builder --source tkg
+```
+
+Show completed builds:
+
+```bash
+proton-builder --list
+```
+
+Remove source checkouts & intermediates:
+
+```bash
+proton-builder --clean
+```
+
+Preview GE-Proton build steps:
+
+```bash
+proton-builder --dry-run --source ge
 ```
 
 #### Build Sources
@@ -786,28 +1209,73 @@ A full CLI package manager for Neutron builds. Installs, deploys to Steam, sets 
 as system Wine, switches active versions, and manages installed Neutron packages —
 all with fzf pickers and numbered fallbacks.
 
+Interactive menu (7 actions):
+
 ```bash
-neutron-install                             # interactive menu (7 actions)
-neutron-install install                     # install from builder output / dir / tarball
-neutron-install deploy                      # deploy to Steam compatibilitytools.d
-neutron-install system-wine                 # install as system Wine (symlinks to ~/.local/bin)
-neutron-install switch                      # switch active Neutron (swap symlinks)
-neutron-install list                        # list managed installs with metadata
-neutron-install remove                      # remove one or more installs
-neutron-install info                        # disk usage, version, architecture details
+neutron-install
+```
+
+Install from builder output / dir / tarball:
+
+```bash
+neutron-install --install
+```
+
+Install a specific package path:
+
+```bash
+neutron-install --install <path>
+```
+
+Deploy to Steam compatibilitytools.d:
+
+```bash
+neutron-install --deploy
+```
+
+Deploy a specific package:
+
+```bash
+neutron-install --deploy <path>
+```
+
+Install as system Wine (symlinks to `~/.local/bin`):
+
+```bash
+neutron-install --system-wine
+```
+
+List managed installs with metadata:
+
+```bash
+neutron-install --list
+```
+
+Remove one or more installs:
+
+```bash
+neutron-install --remove <name>
+```
+
+Disk usage, version, architecture details:
+
+```bash
+neutron-install --info <name>
 ```
 
 #### Features
 
 | Action | Description |
 |--------|-------------|
-| **Install** | Install from neutron-builder output, a directory, or a tarball |
-| **Deploy** | Copy to `~/.steam/*/compatibilitytools.d/` for Steam |
-| **System Wine** | Symlink Wine binaries + `neutron` launcher to `~/.local/bin/` |
-| **Switch** | Change which install is the active system Wine |
-| **List** | Show all managed installs with version, date, active status |
-| **Remove** | Remove installs and clean up symlinks |
-| **Info** | Disk usage, Wine version, source, contents breakdown |
+| **Install** (`--install [PATH]`) | Install from neutron-builder output, a directory, or a tarball |
+| **Deploy** (`--deploy [PATH]`) | Copy to `~/.steam/*/compatibilitytools.d/` for Steam |
+| **System Wine** (`--system-wine [NAME]`) | Symlink Wine binaries + `neutron` launcher to `~/.local/bin/` |
+| **List** (`--list`) | Show all managed installs with version, date, active status |
+| **Remove** (`--remove NAME`) | Remove installs and clean up symlinks |
+| **Info** (`--info NAME`) | Disk usage, Wine version, source, contents breakdown |
+
+Extra flags: `--compat-dir DIR` overrides the compatibilitytools.d path,
+`--bin-dir DIR` overrides the symlink directory, `--dry-run` prints planned actions.
 
 **Managed installs** go to `~/.local/share/mythix-neutron-installs/<name>/` with
 `.mythix-meta` metadata. Symlinks include all Wine binaries (`wine`, `wine64`,
@@ -821,15 +1289,54 @@ Download pre-built Proton releases and deploy locally-built Proton packages into
 Steam's `compatibilitytools.d/`. Handles GE-Proton downloads, any GitHub release
 tarball URL, and deploying proton-builder output — all in one step.
 
+Interactive menu:
+
 ```bash
-proton-install                          # interactive menu
-proton-install --list                   # list installed compatibility tools
-proton-install --install-ge             # download + install latest GE-Proton
-proton-install --install-url URL        # download + install from any URL
-proton-install --deploy PATH            # deploy a locally-built package
-proton-install --remove NAME            # remove an installed tool
-proton-install --compat-dir DIR         # use a non-default compatibilitytools.d
-proton-install --dry-run                # show planned actions without executing
+proton-install
+```
+
+List installed compatibility tools:
+
+```bash
+proton-install --list
+```
+
+Download + install latest GE-Proton:
+
+```bash
+proton-install --install-ge
+```
+
+(`--ge` is a short alias for `--install-ge`.)
+
+Download + install from any URL:
+
+```bash
+proton-install --install-url URL
+```
+
+Deploy a locally-built package:
+
+```bash
+proton-install --deploy PATH
+```
+
+Remove an installed tool:
+
+```bash
+proton-install --remove NAME
+```
+
+Use a non-default compatibilitytools.d:
+
+```bash
+proton-install --compat-dir DIR
+```
+
+Show planned actions without executing:
+
+```bash
+proton-install --dry-run
 ```
 
 #### What It Does
@@ -842,20 +1349,17 @@ not have to manually `cp -r` and `chmod` packages yourself. It:
   Flatpak, etc.).
 - Downloads GE-Proton releases from the official GitHub releases page.
 - Accepts any direct download URL for other community Proton builds.
-- Deploys locally-built Proton packages (from proton-builder) via the `deploy-local`
-  action / `--deploy PATH` flag: copies the package directory into
-  `compatibilitytools.d/` and sets correct permissions.
+- Deploys locally-built Proton packages (from proton-builder) via `--deploy PATH`:
+  copies the package directory into `compatibilitytools.d/` and sets correct
+  permissions.
 - Lists currently installed compatibility tools with name and path.
 - Removes a named tool and its directory.
-
-After any install, remove, or deploy operation, **restart Steam** to pick up the
-changes.
 
 #### CLI Reference
 
 | Flag | Description |
 |------|-------------|
-| `--install-ge` | Download and install the latest GE-Proton release |
+| `--install-ge` / `--ge` | Download and install the latest GE-Proton release |
 | `--install-url URL` | Download and install a Proton release from a direct URL (tar.gz / tar.xz / tar.zst) |
 | `--deploy PATH` | Deploy a locally-built Proton package (proton-builder output, any compatible directory) into compatibilitytools.d |
 | `--list` | List installed compatibility tools |
@@ -865,10 +1369,10 @@ changes.
 
 #### After Changes
 
-Always restart Steam after installing, deploying, or removing a compatibility tool:
+Always restart Steam after installing, deploying, or removing a compatibility tool
+(single command — paste the whole block):
 
 ```bash
-# Graceful restart:
 steam -shutdown && steam
 ```
 
@@ -882,13 +1386,21 @@ Merges any Wine build directly over an existing Proton install, preserving Proto
 DXVK, VKD3D-Proton, Steam overlay DLLs, and Python launcher. Run your custom Wine
 inside Proton's infrastructure — get the best of both worlds.
 
+Interactive wizard:
+
 ```bash
-wine-proton_hybrid                          # interactive wizard
-wine-proton_hybrid \
-    --wine-src ~/builds/wine-staging-10.5 \
-    --proton-src ~/.steam/steam/compatibilitytools.d/GE-Proton10-32 \
-    --name my-hybrid \
-    --install-mode steam
+wine-proton_hybrid
+```
+
+Full non-interactive run (single command — paste the whole block):
+
+```bash
+wine-proton_hybrid --wine-src ~/builds/wine-staging-10.5 --proton-src ~/.steam/steam/compatibilitytools.d/GE-Proton10-32 --name my-hybrid --install-mode steam
+```
+
+Remove a previously installed hybrid:
+
+```bash
 wine-proton_hybrid --uninstall --name my-hybrid
 ```
 
@@ -928,13 +1440,21 @@ single hybrid tool that can be registered with Steam as a compatibility tool or 
 standalone via `./neutron run <game.exe>`. Same concept as wine-proton_hybrid but
 targeting Neutron packages instead of Proton installs.
 
+Interactive wizard:
+
 ```bash
-wine-neutron_hybrid                          # interactive wizard
-wine-neutron_hybrid \
-    --wine-src ~/builds/wine-staging-10.5 \
-    --neutron-src ~/.steam/steam/compatibilitytools.d/mythix-neutron-9.0 \
-    --name my-hybrid \
-    --install-mode steam
+wine-neutron_hybrid
+```
+
+Full non-interactive run (single command — paste the whole block):
+
+```bash
+wine-neutron_hybrid --wine-src ~/builds/wine-staging-10.5 --neutron-src ~/.steam/steam/compatibilitytools.d/mythix-neutron-9.0 --name my-hybrid --install-mode steam
+```
+
+Remove a previously installed hybrid:
+
+```bash
 wine-neutron_hybrid --uninstall --name my-hybrid
 ```
 
@@ -971,6 +1491,8 @@ The hybrid installs a standalone launcher script. Control it with:
 
 A zenity-based GUI for managing Wine prefixes, installing graphics layers, runtimes,
 and components. 20+ modules across 7 categories.
+
+Open the toolkit:
 
 ```bash
 wine_toolz
@@ -1041,7 +1563,7 @@ Run a full health check on any prefix:
 
 A dedicated manager for installing, switching between, and
 uninstalling custom Wine builds. Accessible from both the main `mythix-build` menu
-and winetoolz's Wine category.
+and winetoolz's Wine category, or standalone as `wine_install_mgr`.
 
 **Install location:** `~/.local/share/mythix-wine-installs/<name>/`
 **Symlink directory:** `~/.local/bin/`
@@ -1147,8 +1669,11 @@ mythix-build/
 │   ├── vkd3d-proton.conf                       Shipped VKD3D-Proton config reference
 │   ├── spinner.sh                              Progress animation
 │   ├── ntsync.h                                Kernel header for ntsync support
-│   ├── Containerfile.neutron                    Container build environment
+│   ├── Containerfile.neutron                   Container build environment
 │   ├── neutron-customization.cfg               Build config
+│   ├── profiles/                               Pinned Mythix Wine build recipes
+│   │   ├── README.md
+│   │   ├── mythix-10.17 / mythix-11.11 / mythix-11.19
 │   ├── patches/                                User patch groups (add your own)
 │   │   └── custom/                             Empty template — drop .patch files here
 │   └── deps-neutron-tkg                        TKG dependency list
@@ -1312,53 +1837,47 @@ The wine-builder and neutron-builder ship their own Containerfiles:
 Podman (rootless) is strongly recommended. Docker works too — just drop the `:z`
 volume flags if SELinux is not in use.
 
+> The commands below that span multiple lines are a **single command** — paste the
+> whole block. Each is separate from the next, so you still copy one at a time.
+
 ### Wine Builder Container
 
-**Build the image** (once):
+**Build the image** (once). First:
 
 ```bash
 cd mythix-wine_builder
-
-podman build \
-    --build-arg BUILD_USER="$(whoami)" \
-    --build-arg BUILD_UID="$(id -u)" \
-    --build-arg BUILD_GID="$(id -g)" \
-    -t wine-builder .
 ```
 
-**Run a build:**
+Then (single command — paste the whole block):
 
 ```bash
-podman run --rm -it \
-    -v "$(pwd)":/home/"$(whoami)"/wine-builder:z \
-    -v "${HOME}/wine-builds":/home/"$(whoami)"/wine-builds:z \
-    wine-builder \
-    bash wine-builder.sh --source staging
+podman build --build-arg BUILD_USER="$(whoami)" --build-arg BUILD_UID="$(id -u)" --build-arg BUILD_GID="$(id -g)" -t wine-builder .
+```
+
+**Run a build** (single command — paste the whole block):
+
+```bash
+podman run --rm -it -v "$(pwd)":/home/"$(whoami)"/wine-builder:z -v "${HOME}/wine-builds":/home/"$(whoami)"/wine-builds:z wine-builder bash wine-builder.sh --source staging
 ```
 
 ### Neutron Builder Container
 
-**Build the image** (once):
+**Build the image** (once). First:
 
 ```bash
 cd mythix-neutron_builder
-
-podman build \
-    --build-arg BUILD_USER="$(whoami)" \
-    --build-arg BUILD_UID="$(id -u)" \
-    --build-arg BUILD_GID="$(id -g)" \
-    -t mythix-neutron_builder \
-    -f Containerfile.neutron .
 ```
 
-**Run a build:**
+Then (single command — paste the whole block):
 
 ```bash
-podman run --rm -it \
-    -v "$(pwd)":/home/"$(whoami)"/mythix-neutron_builder:z \
-    -v mythix-neutron_builder-ccache:/home/"$(whoami)"/.ccache:z \
-    mythix-neutron_builder \
-    bash neutron-builder.sh --source proton-wine
+podman build --build-arg BUILD_USER="$(whoami)" --build-arg BUILD_UID="$(id -u)" --build-arg BUILD_GID="$(id -g)" -t mythix-neutron_builder -f Containerfile.neutron .
+```
+
+**Run a build** (single command — paste the whole block):
+
+```bash
+podman run --rm -it -v "$(pwd)":/home/"$(whoami)"/mythix-neutron_builder:z -v mythix-neutron_builder-ccache:/home/"$(whoami)"/.ccache:z mythix-neutron_builder bash neutron-builder.sh --source proton-wine
 ```
 
 ### Container Notes
@@ -1373,13 +1892,29 @@ podman run --rm -it \
   download needed. Configure detects it automatically and compiles ntsync support in.
 - All interactive features (fzf pickers, version selectors) work inside the container
   as long as you pass `-it` for an interactive TTY.
+- Inside the neutron container you can also just run the builder directly:
+  `bash neutron-builder.sh --source ...` (see above) — the `--container` /
+  `--no-container` flags of the builder itself control whether it *creates* a
+  container run from the host.
 
 ### Installing Podman
 
+Debian / Ubuntu:
+
 ```bash
-sudo apt install podman            # Debian / Ubuntu
-sudo dnf install podman            # Fedora
-sudo pacman -S podman              # Arch
+sudo apt install podman
+```
+
+Fedora:
+
+```bash
+sudo dnf install podman
+```
+
+Arch:
+
+```bash
+sudo pacman -S podman
 ```
 
 ---
@@ -1436,13 +1971,10 @@ Install with `pip install -e .` or `make py-dev` (which also installs dev deps).
 
 ### One-Liner (Debian/Ubuntu)
 
+Install everything for native builds (single command — paste the whole block):
+
 ```bash
-sudo apt install git make gcc g++ autoconf automake pkg-config \
-    gcc-i686-linux-gnu g++-i686-linux-gnu \
-    gcc-mingw-w64 g++-mingw-w64 \
-    meson ninja-build glslang-tools \
-    rsync python3 curl ccache fzf zenity zstd \
-    python3-tk python3-pip
+sudo apt install git make gcc g++ autoconf automake pkg-config gcc-i686-linux-gnu g++-i686-linux-gnu gcc-mingw-w64 g++-mingw-w64 meson ninja-build glslang-tools rsync python3 curl ccache fzf zenity zstd python3-tk python3-pip
 ```
 
 ---
@@ -1466,8 +1998,11 @@ clean up `~/.bashrc` entries.
 use the Wine Install Manager to remove individual builds first, or delete the
 directory manually.
 
-**Python frontend:** `pip uninstall mythix-build` removes the Python package and the
-`mythix` console script.
+**Python frontend:** remove the Python package and the `mythix` console script:
+
+```bash
+pip uninstall mythix-build
+```
 
 ---
 
