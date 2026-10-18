@@ -3,14 +3,11 @@
 **Wine & Neutron builders, delegated Proton builder, hybrid installer, GUI toolkit, and installers — all in one repo.**
 
 Build Wine from 10 upstream sources, compile full Neutron packages for Steam, build
-GE-Proton and proton-tkg using their own upstream build systems, merge custom Wine
-over existing Proton installs, manage installations with one-click switching, deploy
-builds and download pre-built releases, and handle prefixes, DXVK, runtimes, and DLL
-overrides through a zenity-based GUI. Or do it all from the CLI.
-
-Now with a **Python frontend** — a Textual TUI, Tkinter GUI, and Click CLI that wrap
-the battle-tested shell engines with modern keyboard navigation, live build progress,
-and a tool catalogue.
+GE-Proton and proton-tkg using their own upstream build systems via a delegated install 
+inside a container running with podman, merge custom Wine over existing Proton 
+installs, manage installations with one-click switching, deploy builds and download 
+pre-built releases, and handle prefixes, DXVK, runtimes, and DLL overrides through a 
+zenity-based GUI. Or do it all from the CLI.
 
 ```
                      ____________________
