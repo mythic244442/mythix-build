@@ -2005,4 +2005,4 @@ pip uninstall mythix-build
 
 ---
 
-*mythix edition — made with love :3*
+*Made by Mythix with steel, grit, and hard work beyond measure :3*
