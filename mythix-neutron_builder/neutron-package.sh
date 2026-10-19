@@ -97,8 +97,7 @@ ok "compatibilitytool.vdf written"
 #    slr4    → 4183110 (SLR 4.0 — Proton 11+)
 # ══════════════════════════════════════════════════════════════════════════════
 sep "Writing toolmanifest.vdf"
-_rt="${STEAM_RUNTIME:-none}"
-_rt_appid="${STEAM_RUNTIME_APPID[$_rt]:-}"
+_rt_appid="${STEAM_RUNTIME_APPID_VALUE:-}"
 
 if [ -n "$_rt_appid" ]; then
     cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" <<VDFEOF
@@ -111,7 +110,7 @@ if [ -n "$_rt_appid" ]; then
   "compatmanager_layer_name" "neutron"
 }
 VDFEOF
-    ok "toolmanifest.vdf written (${STEAM_RUNTIME_LABEL[$_rt]})"
+    ok "toolmanifest.vdf written (${STEAM_RUNTIME_LABEL_VALUE:-runtime ${_rt_appid}})"
 else
     cat > "${NEUTRON_PACKAGE_DIR}/toolmanifest.vdf" << 'EOF'
 "manifest"
