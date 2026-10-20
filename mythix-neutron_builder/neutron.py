@@ -2052,8 +2052,14 @@ class Session:
         if self.use_wayland:
             overrides["winewayland.drv"] = "b"
 
-        # Disable VR client DLLs — Proton's copies crash without Steam VR
-        if os.environ.get("NEUTRON_ATOM_PROTON"):
+        # Disable VR client DLLs — Proton's copies assert without the OpenVR
+        # registry state only Proton sets up, so a vrclient left in the prefix
+        # by another tool kills any game that touches OpenVR at startup. Only
+        # a build that ships its own vrclient (found in pe_system32, the same
+        # check _install_vr_dlls uses) is allowed to run one.
+        ships_vrclient = os.path.isfile(
+            os.path.join(n.pe_system32, "vrclient_x64.dll"))
+        if os.environ.get("NEUTRON_ATOM_PROTON") or not ships_vrclient:
             overrides["vrclient"] = ""
             overrides["vrclient_x64"] = ""
 

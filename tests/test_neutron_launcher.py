@@ -172,3 +172,26 @@ def test_steamclient_dlls_installed_and_refreshed(neutron_mod, tmp_path, monkeyp
     cd._ensure_steamclient_dlls()
     assert (dst / "steamclient.dll").read_bytes() == b"MZ-updated"
     assert len((tmp_path / "compatdata" / "tracked_files").read_text().splitlines()) == 2
+
+
+# ── vrclient DLL overrides ───────────────────────────────────────────────────
+# A vrclient left in the prefix by another tool (e.g. a Proton run symlinking
+# its own) asserts at startup because Neutron never sets up Proton's OpenVR
+# registry state — the game dies with exit code 3 (Cyberpunk, 2026-10-19).
+# Only a build that ships its own vrclient may run one.
+
+def test_foreign_vrclient_disabled_when_build_ships_none(session_for):
+    s = session_for(BRIDGE)
+    s._build_dll_overrides()
+    combined = s.env.get("WINEDLLOVERRIDES", "")
+    assert "vrclient=" in combined
+    assert "vrclient_x64=" in combined
+
+
+def test_own_vrclient_stays_enabled(session_for):
+    s = session_for(BRIDGE)
+    (Path(s.neutron.pe_system32) / "vrclient_x64.dll").write_bytes(b"MZvrclient")
+    s._build_dll_overrides()
+    combined = s.env.get("WINEDLLOVERRIDES", "")
+    assert "vrclient=" not in combined
+    assert "vrclient_x64=" not in combined
