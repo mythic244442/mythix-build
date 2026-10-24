@@ -35,6 +35,11 @@
 #   - WoW64 mode toggle, user_settings.py overrides, an extensible
 #     compat_config framework, and NEUTRON_LOG logging + health warnings
 #
+# Optional integrations (translation layers, Steam, VR, NVIDIA, Sony pads)
+# are Component classes listed in COMPONENTS: each says what it installs,
+# which env and DLL overrides it adds, what it sweeps, what it redoes every
+# launch and what diag shows; the core only calls the hooks.
+#
 # Bundled DXVK / VKD3D-Proton DLLs under files/lib/wine are installed into
 # prefixes by the tracked runtime overlay.  `wined3d` disables DXVK injection;
 # VKD3D-Proton remains available for D3D12.
@@ -948,13 +953,6 @@ class CompatData:
 
     # Where another compat tool's leftovers are looked for each launch
     FOREIGN_SCAN_DIRS = ("drive_c/windows/system32", "drive_c/windows/syswow64")
-    VR_FILES = (
-        "drive_c/windows/system32/vrclient_x64.dll",
-        "drive_c/windows/syswow64/vrclient.dll",
-        "drive_c/vrclient/bin/vrclient_x64.dll",
-        "drive_c/vrclient/bin/vrclient.dll",
-        "drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath",
-    )
 
     def __init__(self):
         self.compat_data = os.environ.get("STEAM_COMPAT_DATA_PATH", "")
@@ -997,159 +995,6 @@ class CompatData:
             pass
         os.close(dr)
 
-    # — Steam client DLLs (tracked) —
-    def _install_steam_dlls(self, track_file=None):
-        if not self.steam_root:
-            return
-        steam_dir = "drive_c/Program Files (x86)/Steam/"
-        makedirs(os.path.join(self.prefix, steam_dir))
-        legacy = os.path.join(self.steam_root, "legacycompat")
-        # steamclient{,64}.dll are not part of the overlay: see
-        # _ensure_steamclient_dlls (steam.exe launches only).
-        copies = [
-            ("GameOverlayRenderer64.dll", "GameOverlayRenderer64.dll"),
-            ("GameOverlayRenderer.dll", "GameOverlayRenderer.dll"),
-            ("SteamService.exe", "steam.exe"),
-            ("Steam.dll", "Steam.dll"),
-        ]
-        for src_name, dst_name in copies:
-            src = os.path.join(legacy, src_name)
-            if os.path.isfile(src):
-                try_copy(src, steam_dir + dst_name, prefix=self.prefix,
-                         track_file=track_file)
-
-    # — Steam's own steamclient{,64}.dll, for steam.exe launches —
-    def _ensure_steamclient_dlls(self):
-        """Valve's ntdll trampolines Steam's steamclient{,64}.dll into
-        lsteamclient, so they only work with an lsteamclient built for this
-        exact Wine (STEAM_BRIDGE=ge builds). With a mismatched one they crash
-        (the old Cyberpunk 2077 access violation). Installed per launch, only
-        when the launch goes through steam.exe, and refreshed after Steam
-        updates them."""
-        if not self.steam_root:
-            return
-        steam_dir = "drive_c/Program Files (x86)/Steam/"
-        legacy = os.path.join(self.steam_root, "legacycompat")
-        makedirs(os.path.join(self.prefix, steam_dir))
-        with open(self.tracked_files_file, "a") as tf:
-            for name in ("steamclient.dll", "steamclient64.dll"):
-                src = os.path.join(legacy, name)
-                dst = os.path.join(self.prefix, steam_dir, name)
-                try:
-                    s = os.stat(src)
-                except OSError:
-                    continue
-                try:
-                    d = os.stat(dst)
-                    if d.st_size == s.st_size and int(d.st_mtime) == int(s.st_mtime):
-                        continue
-                except OSError:
-                    pass
-                try_copy(src, steam_dir + name, prefix=self.prefix,
-                         track_file=tf)
-
-    # — bundled Direct3D translation layers (tracked) —
-    def _read_translation_manifest(self):
-        ours = {}
-        try:
-            with open(self.translation_files_file) as f:
-                for line in f:
-                    parts = line.rstrip("\n").split("\t")
-                    if len(parts) == 3:
-                        ours[parts[0]] = (int(parts[1]), int(parts[2]))
-        except (OSError, ValueError):
-            pass
-        return ours
-
-    def _is_our_translation_dll(self, rel, ours):
-        """True when the file at rel is byte-for-byte the copy Neutron placed
-        (size+mtime recorded at install; try_copy preserves the source mtime).
-        A user-replaced DLL differs and is preserved."""
-        if rel not in ours:
-            return False
-        try:
-            st = os.stat(os.path.join(self.prefix, rel))
-        except OSError:
-            return False
-        return (st.st_size, int(st.st_mtime)) == ours[rel]
-
-    def _install_translation_dlls(self, session, track_file=None):
-        n = session.neutron
-        installed = []
-        ours = self._read_translation_manifest()
-
-        def install(src, dst_dir, dll):
-            rel = dst_dir + "/" + dll
-            dst = os.path.join(self.prefix, rel)
-            expect = "x64" if dst_dir.endswith("system32") else "x86"
-            problem = check_translation_dll(src, expect)
-            if problem:
-                log(f"WARNING: skipping bundled {os.path.relpath(src, n.dir)}: "
-                    f"{problem} — prefix keeps its current {dll}")
-                return
-            # Replace Wine builtins and our own earlier copies; anything else
-            # is a user-installed native DLL (winetricks, manual) — keep it.
-            if file_exists(dst, follow_symlinks=False) and \
-                    not file_is_wine_builtin_dll(dst) and \
-                    not self._is_our_translation_dll(rel, ours):
-                log(f"preserving user-native graphics DLL: {rel}")
-                return
-            makedirs(os.path.join(self.prefix, dst_dir))
-            try_copy(src, rel, prefix=self.prefix, track_file=track_file)
-            try:
-                st = os.stat(dst)
-                ours[rel] = (st.st_size, int(st.st_mtime))
-            except OSError:
-                pass
-            installed.append(dll)
-
-        # WineD3D is an explicit request to use Wine's OpenGL Direct3D path,
-        # so a layer marked wined3d_off (DXVK) isn't placed where it would
-        # override it — and the Wine builtins go back over copies Neutron
-        # itself installed earlier (user-installed natives are left alone).
-        wined3d = "wined3d" in session.compat_config
-        for layer in TRANSLATION_LAYERS:
-            for arch, dst_dir in PREFIX_ARCH_DIRS:
-                if not (wined3d and layer.wined3d_off):
-                    for dll, src in n.layer_dlls(layer, arch):
-                        install(src, dst_dir, dll + ".dll")
-                    continue
-                for dll in layer.dlls:
-                    rel = f"{dst_dir}/{dll}.dll"
-                    dst = os.path.join(self.prefix, rel)
-                    builtin = os.path.join(n.default_pfx_dir, rel)
-                    if self._is_our_translation_dll(rel, ours) and \
-                            file_exists(builtin, follow_symlinks=True):
-                        log(f"restoring Wine builtin {rel} (wined3d)")
-                        os.remove(dst)
-                        self._pfx_copy(builtin, dst)
-                        ours.pop(rel, None)
-
-        try:
-            with open(self.translation_files_file, "w") as f:
-                for rel, (size, mtime) in sorted(ours.items()):
-                    f.write(f"{rel}\t{size}\t{mtime}\n")
-        except OSError:
-            pass
-        if installed:
-            log("installed bundled DXVK/VKD3D-Proton runtime DLLs")
-
-    # — optional VR client DLLs for SteamVR/OpenVR (tracked) —
-    def _install_vr_dlls(self, neutron, track_file=None):
-        vrclient_dir = "drive_c/vrclient/bin"
-        pairs = [
-            (os.path.join(neutron.pe_system32, "vrclient_x64.dll"), vrclient_dir),
-            (os.path.join(neutron.pe_syswow64, "vrclient.dll"), vrclient_dir),
-        ]
-        installed = False
-        for src, dst in pairs:
-            if file_exists(src, follow_symlinks=True):
-                makedirs(os.path.join(self.prefix, dst))
-                try_copy(src, dst, prefix=self.prefix, track_file=track_file,
-                         optional=True)
-                installed = True
-        return installed
-
     # — .update-timestamp (suppresses Wine's own prefix re-init) —
     def _write_timestamp(self, neutron):
         ts_file = os.path.join(self.prefix, ".update-timestamp")
@@ -1161,6 +1006,8 @@ class CompatData:
             pass
 
     # — config-info: the inputs whose change forces a DLL re-overlay —
+    # The order is part of the prefix format: reordering it makes every
+    # existing prefix re-overlay once.
     def _compute_config_info(self, session):
         n = session.neutron
         cc = session.compat_config
@@ -1180,7 +1027,7 @@ class CompatData:
             str("wined3d" in cc),
             str(session.use_nvapi),
             str(session.use_wow64),
-            str(bool(session.nvidia_wine_dll_dir)),
+            str(bool(session.components["nvidia"].dll_dir)),
         ))
 
     # — remove stale builtins that we no longer ship —
@@ -1215,8 +1062,8 @@ class CompatData:
             log(f"warning: could not quarantine {rel}: {e.strerror}")
             return False
 
-    def _sweep_foreign_files(self, neutron):
-        own = os.path.realpath(neutron.dir) + os.sep
+    def _sweep_foreign_files(self, session):
+        own = os.path.realpath(session.neutron.dir) + os.sep
         moved = []
         for d in self.FOREIGN_SCAN_DIRS:
             try:
@@ -1235,8 +1082,8 @@ class CompatData:
                     continue
                 if self._quarantine(d + "/" + e.name):
                     moved.append(e.name)
-        if not neutron.has_vrclient():
-            for rel in self.VR_FILES:
+        for c in session.components.values():
+            for rel in c.stray_files():
                 if file_exists(os.path.join(self.prefix, rel),
                                follow_symlinks=False) and self._quarantine(rel):
                     moved.append(os.path.basename(rel))
@@ -1370,22 +1217,10 @@ class CompatData:
                     "re-overlaying (NEUTRON_DOWNGRADE_REBUILD=1 or "
                     "`destroyprefix` forces a clean rebuild)")
 
-    # — steam / VR / NVIDIA extras appended to the manifest —
+    # — each component's files, appended to the manifest —
     def _overlay_extras(self, session, track_file):
-        log("installing bundled graphics runtime DLLs...")
-        self._install_translation_dlls(session, track_file)
-        log("installing Steam client DLLs...")
-        self._install_steam_dlls(track_file)
-        self._install_vr_dlls(session.neutron, track_file)
-
-        # NVIDIA driver DLLs (nvngx/DLSS) discovered on the host
-        if session.nvidia_wine_dll_dir:
-            log("installing NVIDIA nvngx DLLs...")
-            for dll in ("_nvngx.dll", "nvngx.dll"):
-                src = os.path.join(session.nvidia_wine_dll_dir, dll)
-                if file_exists(src, follow_symlinks=True):
-                    try_copy(src, "drive_c/windows/system32", prefix=self.prefix,
-                             track_file=track_file, optional=True)
+        for c in session.components.values():
+            c.install(track_file)
 
     # — full prefix setup: version upgrade + template clone + overlay —
     def setup_prefix(self, session):
@@ -1456,7 +1291,7 @@ class CompatData:
 
             # before the overlay decision, so whatever we pull out that we
             # ship gets our own copy back on this same launch
-            swept = not first_init and self._sweep_foreign_files(n)
+            swept = not first_init and self._sweep_foreign_files(session)
 
             # versioned DLL overlay — only when something relevant changed
             config_info = self._compute_config_info(session)
@@ -1485,10 +1320,9 @@ class CompatData:
                 f.write(CURRENT_PREFIX_VERSION + "\n")
 
             # cheap per-launch wiring
-            if session.use_steam_shim and session.steam_bridge:
-                self._ensure_steamclient_dlls()
             self._setup_drives(session)
-            self._setup_openvr(session)
+            for c in session.components.values():
+                c.per_launch()
             self._write_timestamp(n)
             if first_init:
                 log("prefix ready.")
@@ -1519,48 +1353,6 @@ class CompatData:
         self._setup_dir_drive(session, "gamedrive", "s:", game_lib)
         self._setup_dir_drive(session, "steamdrive", "t:",
                               self.steam_root or None)
-
-    # — OpenVR: rewrite openvrpaths.vrpath into the prefix, capture runtime —
-    def _setup_openvr(self, session):
-        env = session.env
-        # No vrclient of our own: a vrpath would only lead DXVK's openvr
-        # bridge to one (the sweep keeps other tools' copies out)
-        if not session.neutron.has_vrclient():
-            return
-        if "VR_PATHREG_OVERRIDE" in env:
-            src = env["VR_PATHREG_OVERRIDE"]
-        elif "XDG_CONFIG_HOME" in env:
-            src = os.path.join(env["XDG_CONFIG_HOME"],
-                               "openvr/openvrpaths.vrpath")
-        elif "HOME" in env:
-            src = os.path.join(env["HOME"],
-                               ".config/openvr/openvrpaths.vrpath")
-        else:
-            return
-        if not file_exists(src, follow_symlinks=True):
-            return
-        try:
-            with open(src) as f:
-                contents = json.load(f)
-        except (OSError, ValueError):
-            return
-        if not isinstance(contents.get("runtime"), list):
-            contents["runtime"] = []
-
-        if "VR_OVERRIDE" in env:
-            env["PROTON_VR_RUNTIME"] = env["VR_OVERRIDE"]
-        elif contents["runtime"]:
-            env["PROTON_VR_RUNTIME"] = contents["runtime"][0]
-
-        contents["runtime"] = ["C:\\vrclient\\", "C:\\vrclient"]
-        dst_dir = os.path.join(self.prefix,
-                               "drive_c/users/steamuser/AppData/Local/openvr")
-        makedirs(dst_dir)
-        try:
-            with open(os.path.join(dst_dir, "openvrpaths.vrpath"), "w") as f:
-                json.dump(contents, f, indent=3)
-        except OSError:
-            pass
 
     # — runtime base-Proton lib paths (read back from the marker) —
     def proton_lib_paths(self):
@@ -1707,14 +1499,530 @@ class CompatData:
                 pass
         log("removed tracked files; prefix DLLs will be reinstalled next run")
 
-# ── Runtime environment construction and process execution ───────────────────
-class Session:
-    """Builds the launch environment and runs commands inside it."""
+# ── Components ───────────────────────────────────────────────────────────────
+# Everything optional the launcher wires into a launch (the translation
+# layers, Steam, VR, NVIDIA, Sony pads) is one class with the same hooks, so a
+# new integration is a class added to COMPONENTS, not edits threaded through
+# the overlay, the overrides, the environment and diag. Session builds one of
+# each per launch; the core calls the hooks in COMPONENTS order.
+class Component:
+    """The hooks; each defaults to doing nothing."""
+
+    name = ""    # key in Session.components
+    title = ""   # its `neutron diag` section
+
+    def __init__(self, session):
+        self.session = session
+        self.neutron = session.neutron
+        self.compatdata = session.compatdata
+
+    def ld_paths(self):
+        """Host dirs for LD_LIBRARY_PATH, after the build's own libs."""
+        return []
+
+    def apply_env(self, env):
+        """Launch environment. setdefault, so the user's own values win."""
+
+    def overrides(self):
+        """WINEDLLOVERRIDES entries, {dll: mode}."""
+        return {}
+
+    def install(self, track_file):
+        """Files for the prefix. Part of the versioned overlay, so it only
+        runs when config_info changes; everything placed goes through
+        try_copy(track_file=...) so destroyprefix can take it back out."""
+
+    def stray_files(self):
+        """Prefix-relative files another tool left that must not stay; the
+        foreign sweep quarantines them every launch."""
+        return ()
+
+    def per_launch(self):
+        """Cheap wiring redone on every launch, after the overlay."""
+
+    def diag(self, kv):
+        """Lines for `neutron diag`, via kv(key, value)."""
+
+
+# — the bundled DXVK / VKD3D-Proton (TRANSLATION_LAYERS) —
+class TranslationLayers(Component):
+    name = "layers"
+    title = "translation layers (bundled)"
+
+    def _wined3d(self):
+        return "wined3d" in self.session.compat_config
+
+    def _read_ours(self):
+        ours = {}
+        try:
+            with open(self.compatdata.translation_files_file) as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) == 3:
+                        ours[parts[0]] = (int(parts[1]), int(parts[2]))
+        except (OSError, ValueError):
+            pass
+        return ours
+
+    def _is_ours(self, rel, ours):
+        """True when the file at rel is byte-for-byte the copy Neutron placed
+        (size+mtime recorded at install; try_copy preserves the source mtime).
+        A user-replaced DLL differs and is preserved."""
+        if rel not in ours:
+            return False
+        try:
+            st = os.stat(os.path.join(self.compatdata.prefix, rel))
+        except OSError:
+            return False
+        return (st.st_size, int(st.st_mtime)) == ours[rel]
+
+    def install(self, track_file):
+        log("installing bundled graphics runtime DLLs...")
+        n, cd = self.neutron, self.compatdata
+        installed = []
+        ours = self._read_ours()
+
+        def install(src, dst_dir, dll):
+            rel = dst_dir + "/" + dll
+            dst = os.path.join(cd.prefix, rel)
+            expect = "x64" if dst_dir.endswith("system32") else "x86"
+            problem = check_translation_dll(src, expect)
+            if problem:
+                log(f"WARNING: skipping bundled {os.path.relpath(src, n.dir)}: "
+                    f"{problem} — prefix keeps its current {dll}")
+                return
+            # Replace Wine builtins and our own earlier copies; anything else
+            # is a user-installed native DLL (winetricks, manual) — keep it.
+            if file_exists(dst, follow_symlinks=False) and \
+                    not file_is_wine_builtin_dll(dst) and \
+                    not self._is_ours(rel, ours):
+                log(f"preserving user-native graphics DLL: {rel}")
+                return
+            makedirs(os.path.join(cd.prefix, dst_dir))
+            try_copy(src, rel, prefix=cd.prefix, track_file=track_file)
+            try:
+                st = os.stat(dst)
+                ours[rel] = (st.st_size, int(st.st_mtime))
+            except OSError:
+                pass
+            installed.append(dll)
+
+        # WineD3D is an explicit request to use Wine's OpenGL Direct3D path,
+        # so a layer marked wined3d_off (DXVK) isn't placed where it would
+        # override it — and the Wine builtins go back over copies Neutron
+        # itself installed earlier (user-installed natives are left alone).
+        wined3d = self._wined3d()
+        for layer in TRANSLATION_LAYERS:
+            for arch, dst_dir in PREFIX_ARCH_DIRS:
+                if not (wined3d and layer.wined3d_off):
+                    for dll, src in n.layer_dlls(layer, arch):
+                        install(src, dst_dir, dll + ".dll")
+                    continue
+                for dll in layer.dlls:
+                    rel = f"{dst_dir}/{dll}.dll"
+                    dst = os.path.join(cd.prefix, rel)
+                    builtin = os.path.join(n.default_pfx_dir, rel)
+                    if self._is_ours(rel, ours) and \
+                            file_exists(builtin, follow_symlinks=True):
+                        log(f"restoring Wine builtin {rel} (wined3d)")
+                        os.remove(dst)
+                        cd._pfx_copy(builtin, dst)
+                        ours.pop(rel, None)
+
+        try:
+            with open(cd.translation_files_file, "w") as f:
+                for rel, (size, mtime) in sorted(ours.items()):
+                    f.write(f"{rel}\t{size}\t{mtime}\n")
+        except OSError:
+            pass
+        if installed:
+            log("installed bundled DXVK/VKD3D-Proton runtime DLLs")
+
+    def overrides(self):
+        # Only for DLLs we actually ship, in the profile's style ("n" =
+        # native-only like Proton, no silent fallback).
+        style = profile()["d3d_override"]
+        wined3d = self._wined3d()
+        return {dll: style
+                for layer in TRANSLATION_LAYERS
+                if not (wined3d and layer.wined3d_off)
+                for dll, _ in self.neutron.layer_dlls(layer, "x64")}
+
+    def diag(self, kv):
+        n = self.neutron
+        found = False
+        for layer in TRANSLATION_LAYERS:
+            for arch, _ in PREFIX_ARCH_DIRS:
+                d = n.layer_dir(layer, arch)
+                if not d:
+                    continue
+                found = True
+                sub = os.path.basename(d)
+                for dll in sorted(os.listdir(d)):
+                    if not dll.lower().endswith(".dll"):
+                        continue
+                    problem = check_translation_dll(os.path.join(d, dll), arch)
+                    shipped = dll.lower()[:-4] in layer.dlls
+                    kv(f"{layer.name} {sub}/{dll}",
+                       ("ok" if problem is None else f"BAD — {problem}")
+                       + ("" if shipped else " (not in manifest, never installed)"))
+        if not found:
+            kv("(none)", "no bundled DXVK/VKD3D-Proton dirs under files/lib/wine")
+        kv("overrides style", profile()["d3d_override"]
+           + (" (wined3d: DXVK overrides off)" if self._wined3d() else ""))
+
+
+# — Steam: the client's DLLs in the prefix, lsteamclient, steam.exe launches —
+class Steam(Component):
+    name = "steam"
+    title = "steam"
+
+    STEAM_DIR = "drive_c/Program Files (x86)/Steam/"
+
+    def __init__(self, session):
+        super().__init__(session)
+        # lsteamclient + steam.exe built with this Wine → Proton's Steam model
+        self.bridge = self.neutron.build_info.get("STEAM_BRIDGE") == "ge"
+        self.use_shim, self.shim_reason = self._decide_shim()
+
+    def _decide_shim(self):
+        """-> (use, reason). steam.exe registers the Steam client for the game
+        (lsteamclient's steamclient_init_registry). That only makes sense for a
+        real Steam app while the Steam client is up, so launches with a
+        launcher-made id (e.g. the Mythix Launcher's hex ids for non-Steam
+        games) or without Steam go straight to the game.
+        NEUTRON_USE_STEAM_SHIM=1 forces it, =0 disables it."""
+        knob = os.environ.get("NEUTRON_USE_STEAM_SHIM", "auto")
+        if knob == "0":
+            return False, "off (NEUTRON_USE_STEAM_SHIM=0)"
+        if knob == "1":
+            return True, "forced (NEUTRON_USE_STEAM_SHIM=1)"
+        if not self.bridge:
+            return False, "build has no Steam bridge"
+        env = self.session.env
+        appid = env.get("SteamGameId") or env.get("SteamAppId") or ""
+        if not (appid.isascii() and appid.isdigit() and int(appid) > 0):
+            return False, f"no Steam app id ({appid or 'unset'}): direct launch"
+        if not steam_client_running():
+            return False, "Steam client not running: direct launch"
+        return True, f"Steam app {appid}"
+
+    def ld_paths(self):
+        root = self.compatdata.steam_root
+        if not root:
+            return []
+        return [os.path.join(root, "ubuntu12_64"),
+                os.path.join(root, "ubuntu12_32")]
+
+    def apply_env(self, env):
+        app_id = os.environ.get("SteamAppId", "")
+        if app_id:
+            env.setdefault("SteamAppId", app_id)
+            env.setdefault("SteamGameId", os.environ.get("SteamGameId", app_id))
+
+    def overrides(self):
+        o = {}
+        if self.compatdata.compat_data:
+            o["lsteamclient"] = "n,b"
+        # Proton's steam.exe helper (registers the Steam client for the game)
+        if self.bridge:
+            o["steam.exe"] = "b"
+        return o
+
+    def install(self, track_file):
+        log("installing Steam client DLLs...")
+        cd = self.compatdata
+        if not cd.steam_root:
+            return
+        makedirs(os.path.join(cd.prefix, self.STEAM_DIR))
+        legacy = os.path.join(cd.steam_root, "legacycompat")
+        # steamclient{,64}.dll are not part of the overlay: see
+        # ensure_steamclient_dlls (steam.exe launches only).
+        copies = [
+            ("GameOverlayRenderer64.dll", "GameOverlayRenderer64.dll"),
+            ("GameOverlayRenderer.dll", "GameOverlayRenderer.dll"),
+            ("SteamService.exe", "steam.exe"),
+            ("Steam.dll", "Steam.dll"),
+        ]
+        for src_name, dst_name in copies:
+            src = os.path.join(legacy, src_name)
+            if os.path.isfile(src):
+                try_copy(src, self.STEAM_DIR + dst_name, prefix=cd.prefix,
+                         track_file=track_file)
+
+    def per_launch(self):
+        if self.use_shim and self.bridge:
+            self.ensure_steamclient_dlls()
+
+    def ensure_steamclient_dlls(self):
+        """Valve's ntdll trampolines Steam's steamclient{,64}.dll into
+        lsteamclient, so they only work with an lsteamclient built for this
+        exact Wine (STEAM_BRIDGE=ge builds). With a mismatched one they crash
+        (the old Cyberpunk 2077 access violation). Installed per launch, only
+        when the launch goes through steam.exe, and refreshed after Steam
+        updates them."""
+        cd = self.compatdata
+        if not cd.steam_root:
+            return
+        legacy = os.path.join(cd.steam_root, "legacycompat")
+        makedirs(os.path.join(cd.prefix, self.STEAM_DIR))
+        with open(cd.tracked_files_file, "a") as tf:
+            for name in ("steamclient.dll", "steamclient64.dll"):
+                src = os.path.join(legacy, name)
+                dst = os.path.join(cd.prefix, self.STEAM_DIR, name)
+                try:
+                    s = os.stat(src)
+                except OSError:
+                    continue
+                try:
+                    d = os.stat(dst)
+                    if d.st_size == s.st_size and int(d.st_mtime) == int(s.st_mtime):
+                        continue
+                except OSError:
+                    pass
+                try_copy(src, self.STEAM_DIR + name, prefix=cd.prefix,
+                         track_file=tf)
+
+    def diag(self, kv):
+        n = self.neutron
+        kv("steam bridge",
+           "lsteamclient + steam.exe built with this Wine (Proton Steam model)"
+           if self.bridge else
+           "not built with this Wine — steamclient DLLs not installed")
+        kv("steam.exe launch",
+           ("yes" if self.use_shim else "no") + f" — {self.shim_reason}")
+        # Proton-only components decide whether Steam titles can bridge at all
+        comps = []
+        for name, path in (
+                ("lsteamclient.dll", os.path.join(n.pe_system32, "lsteamclient.dll")),
+                ("lsteamclient.so", os.path.join(n.unix_dir, "lsteamclient.so")),
+                ("steam.exe", os.path.join(n.pe_system32, "steam.exe"))):
+            comps.append(f"{name}:{'yes' if os.path.exists(path) else 'NO'}")
+        kv("proton components", "  ".join(comps))
+        if not os.path.exists(os.path.join(n.pe_system32, "lsteamclient.dll")):
+            kv("", "no lsteamclient in this build — Steam titles need a "
+                   "base-Proton prefix (createprefix --proton) + "
+                   "NEUTRON_INJECT_BASE_PROTON=1")
+        kv("steam root", self.compatdata.steam_root or "(unset)")
+
+
+# — SteamVR / OpenVR / OpenXR —
+# Only a build that ships its own vrclient (both halves) may run one: another
+# tool's copy left in the prefix crashes against our Wine as soon as DXVK's
+# openvr bridge loads it (Cyberpunk exit code 3, 2026-10-19).
+class VR(Component):
+    name = "vr"
+    title = "vr"
 
     OPENXR_RUNTIMES = [
         "/usr/share/openxr/1/openxr_monado.json",
         "/etc/openxr/1/active_runtime.json",
     ]
+    # what a VR-capable tool leaves in a prefix
+    VR_FILES = (
+        "drive_c/windows/system32/vrclient_x64.dll",
+        "drive_c/windows/syswow64/vrclient.dll",
+        "drive_c/vrclient/bin/vrclient_x64.dll",
+        "drive_c/vrclient/bin/vrclient.dll",
+        "drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath",
+    )
+
+    def __init__(self, session):
+        super().__init__(session)
+        self.steamvr_home = ""
+        root = self.compatdata.steam_root
+        if root:
+            candidate = os.path.join(root, "steamapps", "common", "SteamVR")
+            if os.path.isdir(candidate):
+                self.steamvr_home = candidate
+
+    @property
+    def available(self):
+        return self.neutron.has_vrclient()
+
+    def ld_paths(self):
+        if not self.steamvr_home:
+            return []
+        return [os.path.join(self.steamvr_home, "bin", "linux64"),
+                os.path.join(self.steamvr_home, "bin")]
+
+    def apply_env(self, env):
+        if self.steamvr_home:
+            env.setdefault("VR_OVERRIDE", self.steamvr_home)
+            vrclient = os.path.join(self.steamvr_home, "bin", "linux64",
+                                    "vrclient.so")
+            if os.path.isfile(vrclient):
+                env.setdefault("OPENVR_RUNTIME", vrclient)
+        for runtime in self.OPENXR_RUNTIMES:
+            if os.path.isfile(runtime):
+                env.setdefault("XR_RUNTIME_JSON", runtime)
+                break
+        if env.get("NEUTRON_VR_DEBUG") == "1":
+            env["WINEDEBUG"] = "+timestamp,+vrclient,+openxr"
+            env["DXVK_LOG_LEVEL"] = "info"
+
+    def overrides(self):
+        # the atom container's Proton leaves its own vrclient behind too
+        if os.environ.get("NEUTRON_ATOM_PROTON") or not self.available:
+            return {"vrclient": "", "vrclient_x64": ""}
+        return {}
+
+    def install(self, track_file):
+        n, cd = self.neutron, self.compatdata
+        vrclient_dir = "drive_c/vrclient/bin"
+        for src in (os.path.join(n.pe_system32, "vrclient_x64.dll"),
+                    os.path.join(n.pe_syswow64, "vrclient.dll")):
+            if file_exists(src, follow_symlinks=True):
+                makedirs(os.path.join(cd.prefix, vrclient_dir))
+                try_copy(src, vrclient_dir, prefix=cd.prefix,
+                         track_file=track_file, optional=True)
+
+    def stray_files(self):
+        return () if self.available else self.VR_FILES
+
+    def per_launch(self):
+        """Rewrite openvrpaths.vrpath into the prefix, capture the runtime.
+        Without a vrclient of our own a vrpath would only lead DXVK's openvr
+        bridge to one (the sweep keeps other tools' copies out)."""
+        if not self.available:
+            return
+        env = self.session.env
+        if "VR_PATHREG_OVERRIDE" in env:
+            src = env["VR_PATHREG_OVERRIDE"]
+        elif "XDG_CONFIG_HOME" in env:
+            src = os.path.join(env["XDG_CONFIG_HOME"],
+                               "openvr/openvrpaths.vrpath")
+        elif "HOME" in env:
+            src = os.path.join(env["HOME"],
+                               ".config/openvr/openvrpaths.vrpath")
+        else:
+            return
+        if not file_exists(src, follow_symlinks=True):
+            return
+        try:
+            with open(src) as f:
+                contents = json.load(f)
+        except (OSError, ValueError):
+            return
+        if not isinstance(contents.get("runtime"), list):
+            contents["runtime"] = []
+
+        if "VR_OVERRIDE" in env:
+            env["PROTON_VR_RUNTIME"] = env["VR_OVERRIDE"]
+        elif contents["runtime"]:
+            env["PROTON_VR_RUNTIME"] = contents["runtime"][0]
+
+        contents["runtime"] = ["C:\\vrclient\\", "C:\\vrclient"]
+        dst_dir = os.path.join(self.compatdata.prefix,
+                               "drive_c/users/steamuser/AppData/Local/openvr")
+        makedirs(dst_dir)
+        try:
+            with open(os.path.join(dst_dir, "openvrpaths.vrpath"), "w") as f:
+                json.dump(contents, f, indent=3)
+        except OSError:
+            pass
+
+    def diag(self, kv):
+        n, env = self.neutron, self.session.env
+        kv("vrclient", "shipped by this build" if self.available else
+           "not shipped — foreign vrclients disabled and swept "
+           "(NEUTRON_FORCE_VR=1 trusts them)")
+        kv("wineopenxr.dll",
+           "yes" if os.path.exists(os.path.join(n.pe_system32, "wineopenxr.dll"))
+           else "NO")
+        kv("PROTON_VR_RUNTIME", env.get("PROTON_VR_RUNTIME", "(unset)"))
+        kv("VR_OVERRIDE", env.get("VR_OVERRIDE", "(unset)"))
+        kv("XR_RUNTIME_JSON", env.get("XR_RUNTIME_JSON", "(unset)"))
+
+
+# — NVIDIA: the driver's own Wine DLLs (nvngx for DLSS), PRIME offload —
+class Nvidia(Component):
+    name = "nvidia"
+    title = "nvidia"
+
+    def __init__(self, session):
+        super().__init__(session)
+        self.dll_dir = find_nvidia_wine_dll_dir()
+
+    def apply_env(self, env):
+        # NGX/DLSS fallback discovery
+        if self.dll_dir:
+            env.setdefault("NVIDIA_WINE_DLL_DIR", self.dll_dir)
+        if os.environ.get("NEUTRON_PRIME_RENDER_OFFLOAD") == "1":
+            env.setdefault("__NV_PRIME_RENDER_OFFLOAD", "1")
+            env.setdefault("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
+            env.setdefault("__VK_LAYER_NV_optimus", "NVIDIA_only")
+
+    def install(self, track_file):
+        if not self.dll_dir:
+            return
+        log("installing NVIDIA nvngx DLLs...")
+        for dll in ("_nvngx.dll", "nvngx.dll"):
+            src = os.path.join(self.dll_dir, dll)
+            if file_exists(src, follow_symlinks=True):
+                try_copy(src, "drive_c/windows/system32",
+                         prefix=self.compatdata.prefix,
+                         track_file=track_file, optional=True)
+
+    def diag(self, kv):
+        kv("nvidia wine dlls", self.dll_dir or "(not found)")
+        kv("NVIDIA_WINE_DLL_DIR",
+           self.session.env.get("NVIDIA_WINE_DLL_DIR", "(unset)"))
+        kv("PRIME offload",
+           "on" if os.environ.get("NEUTRON_PRIME_RENDER_OFFLOAD") == "1" else "off")
+
+
+# — DualShock 4 / DualSense —
+class Sony(Component):
+    name = "sony"
+    title = "sony controllers"
+
+    def __init__(self, session):
+        super().__init__(session)
+        self.mode = "build default"   # set by apply_env
+
+    def apply_env(self, env):
+        """Builds whose xinput carries GE's Sony stack: by default a Sony pad is
+        also an XInput controller (PROTON_SONY_AUTO_XINPUT=1, GE-Proton's own
+        default) that steps aside when a game reads it natively or Steam Input
+        owns it. MYTHIX_DS4_GLYPHS=1 is native PlayStation mode: the pad stays
+        out of XInputGetState, so PlayStation-aware games read it over HID
+        (PS glyphs), while XInputSetState still rumbles it."""
+        feats = self.neutron.xinput_features()
+        native = env.get("MYTHIX_DS4_GLYPHS", "")[:1] == "1"
+        if not feats["sony_auto"]:
+            self.mode = ("native PlayStation (MYTHIX_DS4_GLYPHS=1)"
+                         if native and feats["glyphs"] else "build default")
+            return
+        if "PROTON_SONY_AUTO_XINPUT" in env:
+            self.mode = ("PROTON_SONY_AUTO_XINPUT="
+                         f"{env['PROTON_SONY_AUTO_XINPUT']} (set by you)")
+        elif native:
+            self.mode = ("native PlayStation (MYTHIX_DS4_GLYPHS=1): "
+                         "input + glyphs over HID, rumble via XInput")
+            if not feats["glyphs"]:
+                self.mode += " (this xinput lacks the Mythix patch)"
+        else:
+            env["PROTON_SONY_AUTO_XINPUT"] = "1"
+            self.mode = ("XInput fallback (PROTON_SONY_AUTO_XINPUT=1), "
+                         "native takeover")
+
+    def diag(self, kv):
+        xi = self.neutron.xinput_features()
+        kv("mode", self.mode)
+        kv("xinput", ", ".join(
+            [name for name, on in (("GE Sony stack", xi["sony_auto"]),
+                                   ("Mythix native mode", xi["glyphs"])) if on]
+            ) or "stock (no Sony handling)")
+
+
+# Hook order: install runs layers → steam → vr → nvidia, as before the split
+COMPONENTS = (TranslationLayers, Steam, VR, Nvidia, Sony)
+
+
+# ── Runtime environment construction and process execution ───────────────────
+class Session:
+    """Builds the launch environment and runs commands inside it."""
 
     def __init__(self, neutron, compatdata):
         self.neutron = neutron
@@ -1749,62 +2057,9 @@ class Session:
         # capability flags consumed by config-info + overlay
         self.use_nvapi = "disablenvapi" not in self.compat_config
         self.use_wow64 = (os.environ.get("NEUTRON_USE_WOW64", "0") == "1")
-        self.nvidia_wine_dll_dir = find_nvidia_wine_dll_dir()
         self.use_wayland, self.wayland_reason = self._decide_wayland()
-        # lsteamclient + steam.exe built with this Wine → Proton's Steam model
-        self.steam_bridge = self.neutron.build_info.get("STEAM_BRIDGE") == "ge"
-        self.use_steam_shim, self.steam_shim_reason = self._decide_steam_shim()
-        self.sony_mode = "build default"   # set by _apply_sony_input_env
 
-    # — Proton's steam.exe helper: per-launch decision —
-    def _decide_steam_shim(self):
-        """-> (use, reason). steam.exe registers the Steam client for the game
-        (lsteamclient's steamclient_init_registry). That only makes sense for a
-        real Steam app while the Steam client is up, so launches with a
-        launcher-made id (e.g. the Mythix Launcher's hex ids for non-Steam
-        games) or without Steam go straight to the game.
-        NEUTRON_USE_STEAM_SHIM=1 forces it, =0 disables it."""
-        knob = os.environ.get("NEUTRON_USE_STEAM_SHIM", "auto")
-        if knob == "0":
-            return False, "off (NEUTRON_USE_STEAM_SHIM=0)"
-        if knob == "1":
-            return True, "forced (NEUTRON_USE_STEAM_SHIM=1)"
-        if not self.steam_bridge:
-            return False, "build has no Steam bridge"
-        appid = self.env.get("SteamGameId") or self.env.get("SteamAppId") or ""
-        if not (appid.isascii() and appid.isdigit() and int(appid) > 0):
-            return False, f"no Steam app id ({appid or 'unset'}): direct launch"
-        if not steam_client_running():
-            return False, "Steam client not running: direct launch"
-        return True, f"Steam app {appid}"
-
-    # — DualShock 4 / DualSense —
-    def _apply_sony_input_env(self):
-        """Builds whose xinput carries GE's Sony stack: by default a Sony pad is
-        also an XInput controller (PROTON_SONY_AUTO_XINPUT=1, GE-Proton's own
-        default) that steps aside when a game reads it natively or Steam Input
-        owns it. MYTHIX_DS4_GLYPHS=1 is native PlayStation mode: the pad stays
-        out of XInputGetState, so PlayStation-aware games read it over HID
-        (PS glyphs), while XInputSetState still rumbles it."""
-        env = self.env
-        feats = self.neutron.xinput_features()
-        native = env.get("MYTHIX_DS4_GLYPHS", "")[:1] == "1"
-        if not feats["sony_auto"]:
-            self.sony_mode = ("native PlayStation (MYTHIX_DS4_GLYPHS=1)"
-                              if native and feats["glyphs"] else "build default")
-            return
-        if "PROTON_SONY_AUTO_XINPUT" in env:
-            self.sony_mode = ("PROTON_SONY_AUTO_XINPUT="
-                              f"{env['PROTON_SONY_AUTO_XINPUT']} (set by you)")
-        elif native:
-            self.sony_mode = ("native PlayStation (MYTHIX_DS4_GLYPHS=1): "
-                              "input + glyphs over HID, rumble via XInput")
-            if not feats["glyphs"]:
-                self.sony_mode += " (this xinput lacks the Mythix patch)"
-        else:
-            env["PROTON_SONY_AUTO_XINPUT"] = "1"
-            self.sony_mode = ("XInput fallback (PROTON_SONY_AUTO_XINPUT=1), "
-                              "native takeover")
+        self.components = {c.name: c for c in (cls(self) for cls in COMPONENTS)}
 
     # — native Wayland driver (winewayland) selection —
     def _decide_wayland(self):
@@ -2004,35 +2259,9 @@ class Session:
         # PATH
         prepend_to_env(env, "PATH", n.bin_dir, ":")
 
-        # Steam overlay paths
-        overlay_paths = []
-        if cd.steam_root:
-            overlay_paths += [
-                os.path.join(cd.steam_root, "ubuntu12_64"),
-                os.path.join(cd.steam_root, "ubuntu12_32"),
-            ]
-
-        # SteamVR runtime exposure
-        steamvr_home = ""
-        if cd.steam_root:
-            candidate = os.path.join(cd.steam_root, "steamapps",
-                                     "common", "SteamVR")
-            if os.path.isdir(candidate):
-                steamvr_home = candidate
-        if steamvr_home:
-            steamvr_linux64 = os.path.join(steamvr_home, "bin", "linux64")
-            overlay_paths += [steamvr_linux64,
-                              os.path.join(steamvr_home, "bin")]
-            env.setdefault("VR_OVERRIDE", steamvr_home)
-            vrclient = os.path.join(steamvr_linux64, "vrclient.so")
-            if os.path.isfile(vrclient):
-                env.setdefault("OPENVR_RUNTIME", vrclient)
-
-        # OpenXR runtime
-        for runtime in self.OPENXR_RUNTIMES:
-            if os.path.isfile(runtime):
-                env.setdefault("XR_RUNTIME_JSON", runtime)
-                break
+        # host library dirs the components need (Steam overlay, SteamVR)
+        overlay_paths = [p for c in self.components.values()
+                         for p in c.ld_paths()]
 
         ac_wine_paths = []
 
@@ -2087,8 +2316,9 @@ class Session:
         # Display driver (native Wayland vs X11/XWayland)
         self._apply_wayland_env()
 
-        # DualShock 4 / DualSense: XInput fallback vs native PlayStation mode
-        self._apply_sony_input_env()
+        # Steam, VR, NVIDIA, Sony pads, ...
+        for c in self.components.values():
+            c.apply_env(env)
 
         # DXVK defaults
         if self.use_nvapi:
@@ -2128,21 +2358,6 @@ class Session:
         if "heaptopdown" in self.compat_config:
             env.setdefault("WINE_HEAP_TOP_DOWN", "1")
 
-        # NVIDIA driver DLL dir for NGX/DLSS fallback discovery
-        if self.nvidia_wine_dll_dir:
-            env.setdefault("NVIDIA_WINE_DLL_DIR", self.nvidia_wine_dll_dir)
-
-        # NVIDIA PRIME offload
-        if os.environ.get("NEUTRON_PRIME_RENDER_OFFLOAD") == "1":
-            env.setdefault("__NV_PRIME_RENDER_OFFLOAD", "1")
-            env.setdefault("__GLX_VENDOR_LIBRARY_NAME", "nvidia")
-            env.setdefault("__VK_LAYER_NV_optimus", "NVIDIA_only")
-
-        # VR-specific debugging
-        if env.get("NEUTRON_VR_DEBUG") == "1":
-            env["WINEDEBUG"] = "+timestamp,+vrclient,+openxr"
-            env["DXVK_LOG_LEVEL"] = "info"
-
         # MangoHud
         if env.get("MANGOHUD") == "1":
             env.setdefault("MANGOHUD_DLSYM", "1")
@@ -2153,13 +2368,6 @@ class Session:
         if use_gamemode == "auto":
             use_gamemode = "1" if gamemode_available else "0"
         self.gamemode_wrap = use_gamemode == "1" and gamemode_available
-
-        # Steam App ID forwarding
-        app_id = os.environ.get("SteamAppId", "")
-        game_id = os.environ.get("SteamGameId", app_id)
-        if app_id:
-            env.setdefault("SteamAppId", app_id)
-            env.setdefault("SteamGameId", game_id)
 
         # Host health diagnostics
         self._check_system_limits()
@@ -2174,37 +2382,13 @@ class Session:
             self._setup_logging()
 
     def _build_dll_overrides(self):
-        cd = self.compatdata
         overrides = {}
-
-        if cd.compat_data:
-            overrides["lsteamclient"] = "n,b"
-
-        # Translation-layer overrides: only for DLLs we actually ship, in the
-        # profile's style ("n" = native-only like Proton, no silent fallback).
-        n = self.neutron
-        style = profile()["d3d_override"]
-        wined3d = "wined3d" in self.compat_config
-        for layer in TRANSLATION_LAYERS:
-            if wined3d and layer.wined3d_off:
-                continue
-            for dll, _ in n.layer_dlls(layer, "x64"):
-                overrides[dll] = style
-
-        # Proton's steam.exe helper (registers the Steam client for the game)
-        if self.steam_bridge:
-            overrides["steam.exe"] = "b"
+        for c in self.components.values():
+            overrides.update(c.overrides())
 
         # Native Wayland driver: make sure it isn't disabled by a stale override
         if self.use_wayland:
             overrides["winewayland.drv"] = "b"
-
-        # Disable VR client DLLs unless this build ships its own — another
-        # tool's copy (a Proton that ran in the prefix, or the atom container)
-        # crashes against our Wine as soon as DXVK's openvr bridge loads it
-        if os.environ.get("NEUTRON_ATOM_PROTON") or not n.has_vrclient():
-            overrides["vrclient"] = ""
-            overrides["vrclient_x64"] = ""
 
         combined = ";".join(f"{k}={v}" for k, v in overrides.items())
         if combined:
@@ -2343,7 +2527,7 @@ class Session:
         use_steam_shim = (
             steam_exe and os.path.exists(steam_exe)
             and exe_name != "steam.exe"
-            and self.use_steam_shim)
+            and self.components["steam"].use_shim)
 
         if use_steam_shim:
             log("launching through steam.exe shim")
@@ -2505,39 +2689,12 @@ class Session:
             kv("build-info", "  ".join(f"{k}={bi[k]}" for k in
                                        ("PROFILE", "BUILD_MODE", "WAYLAND", "SOURCE")
                                        if bi.get(k)))
-        kv("steam bridge",
-           "lsteamclient + steam.exe built with this Wine (Proton Steam model)"
-           if self.steam_bridge else
-           "not built with this Wine — steamclient DLLs not installed")
-        kv("steam.exe launch",
-           ("yes" if self.use_steam_shim else "no") + f" — {self.steam_shim_reason}")
-        xi = n.xinput_features()
-        kv("sony controllers", self.sony_mode)
-        kv("xinput", ", ".join(
-            [name for name, on in (("GE Sony stack", xi["sony_auto"]),
-                                   ("Mythix native mode", xi["glyphs"])) if on]
-            ) or "stock (no Sony handling)")
         kv("display driver",
            ("wayland" if self.use_wayland else
             env.get("WINE_GRAPHICS_DRIVER", "build default"))
            + f" — {self.wayland_reason}")
         if self.use_wayland:
             kv("wayland monitor", env.get("WAYLANDDRV_PRIMARY_MONITOR", "(compositor default)"))
-        # Proton-only components decide whether Steam titles can bridge at all
-        comps = []
-        for name, path in (
-                ("lsteamclient.dll", os.path.join(n.pe_system32, "lsteamclient.dll")),
-                ("lsteamclient.so", os.path.join(n.lib_dir, "wine", "x86_64-unix",
-                                                 "lsteamclient.so")),
-                ("steam.exe", os.path.join(n.pe_system32, "steam.exe")),
-                ("vrclient_x64.dll", os.path.join(n.pe_system32, "vrclient_x64.dll")),
-                ("wineopenxr.dll", os.path.join(n.pe_system32, "wineopenxr.dll"))):
-            comps.append(f"{name}:{'yes' if os.path.exists(path) else 'NO'}")
-        kv("proton components", "  ".join(comps))
-        if not os.path.exists(os.path.join(n.pe_system32, "lsteamclient.dll")):
-            kv("", "no lsteamclient in this build — Steam titles need a "
-                   "base-Proton prefix (createprefix --proton) + "
-                   "NEUTRON_INJECT_BASE_PROTON=1")
         if n.missing_default_prefix():
             template_state = "missing (created on first launch)"
         elif n.default_prefix_stale():
@@ -2546,28 +2703,9 @@ class Session:
             template_state = "ready"
         kv("default_pfx", f"[{template_state}] {n.default_pfx_dir}")
 
-        section("translation layers (bundled)")
-        found = False
-        for layer in TRANSLATION_LAYERS:
-            for arch, _ in PREFIX_ARCH_DIRS:
-                d = n.layer_dir(layer, arch)
-                if not d:
-                    continue
-                found = True
-                sub = os.path.basename(d)
-                for dll in sorted(os.listdir(d)):
-                    if not dll.lower().endswith(".dll"):
-                        continue
-                    problem = check_translation_dll(os.path.join(d, dll), arch)
-                    shipped = dll.lower()[:-4] in layer.dlls
-                    kv(f"{layer.name} {sub}/{dll}",
-                       ("ok" if problem is None else f"BAD — {problem}")
-                       + ("" if shipped else " (not in manifest, never installed)"))
-        if not found:
-            kv("(none)", "no bundled DXVK/VKD3D-Proton dirs under files/lib/wine")
-        kv("overrides style", profile()["d3d_override"]
-           + (" (wined3d: DXVK overrides off)"
-              if "wined3d" in self.compat_config else ""))
+        for c in self.components.values():
+            section(c.title)
+            c.diag(kv)
 
         section("sync backend")
         build_ntsync = self._binary_has(n.wineserver, "ntsync")
@@ -2600,13 +2738,6 @@ class Session:
         kv("nvapi", "on" if self.use_nvapi else "off")
         kv("WINEDLLOVERRIDES", env.get("WINEDLLOVERRIDES", "(unset)"))
 
-        section("nvidia / vr")
-        kv("nvidia wine dlls", self.nvidia_wine_dll_dir or "(not found)")
-        kv("NVIDIA_WINE_DLL_DIR", env.get("NVIDIA_WINE_DLL_DIR", "(unset)"))
-        kv("PROTON_VR_RUNTIME", env.get("PROTON_VR_RUNTIME", "(unset)"))
-        kv("VR_OVERRIDE", env.get("VR_OVERRIDE", "(unset)"))
-        kv("XR_RUNTIME_JSON", env.get("XR_RUNTIME_JSON", "(unset)"))
-
         section("prefix")
         kv("STEAM_COMPAT_DATA_PATH", cd.compat_data or "(unset)")
         kv("WINEPREFIX", cd.prefix or "(unset)")
@@ -2627,7 +2758,6 @@ class Session:
                 except OSError:
                     tracked = "(unreadable)"
             kv("tracked files", tracked)
-        kv("steam root", cd.steam_root or "(unset)")
 
         section("container")
         containerized = in_container()

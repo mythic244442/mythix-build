@@ -62,34 +62,34 @@ BRIDGE = "STEAM_BRIDGE=ge\nWAYLAND=1\n"
 def test_mythix_launcher_hex_id_launches_directly(session_for, neutron_mod, monkeypatch):
     monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: True)
     s = session_for(BRIDGE, SteamGameId="78da8e29", SteamAppId="78da8e29")
-    assert not s.use_steam_shim
-    assert "78da8e29" in s.steam_shim_reason
+    assert not s.components["steam"].use_shim
+    assert "78da8e29" in s.components["steam"].shim_reason
 
 
 def test_steam_app_without_steam_client_launches_directly(session_for, neutron_mod, monkeypatch):
     monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: False)
     s = session_for(BRIDGE, SteamGameId="1091500")
-    assert not s.use_steam_shim
-    assert "not running" in s.steam_shim_reason
+    assert not s.components["steam"].use_shim
+    assert "not running" in s.components["steam"].shim_reason
 
 
 def test_steam_app_with_steam_client_uses_steam_exe(session_for, neutron_mod, monkeypatch):
     monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: True)
     s = session_for(BRIDGE, SteamGameId="1091500")
-    assert s.use_steam_shim
+    assert s.components["steam"].use_shim
 
 
 def test_no_bridge_build_never_auto_uses_steam_exe(session_for, neutron_mod, monkeypatch):
     monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: True)
     s = session_for("WAYLAND=1\n", SteamGameId="1091500")
-    assert not s.use_steam_shim
+    assert not s.components["steam"].use_shim
 
 
 @pytest.mark.parametrize(("knob", "expected"), [("0", False), ("1", True)])
 def test_shim_knob_overrides(session_for, neutron_mod, monkeypatch, knob, expected):
     monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: not expected)
     s = session_for(BRIDGE, SteamGameId="1091500", NEUTRON_USE_STEAM_SHIM=knob)
-    assert s.use_steam_shim is expected
+    assert s.components["steam"].use_shim is expected
 
 
 def test_steam_client_running_reads_pid_file(neutron_mod, tmp_path, monkeypatch):
@@ -120,43 +120,42 @@ STOCK_XINPUT = b"MZ..."
 
 def test_ge_xinput_defaults_to_sony_fallback(session_for):
     s = session_for(BRIDGE, GE_XINPUT)
-    s._apply_sony_input_env()
+    s.components["sony"].apply_env(s.env)
     assert s.env["PROTON_SONY_AUTO_XINPUT"] == "1"
 
 
 def test_glyph_mode_keeps_sony_native(session_for):
     s = session_for(BRIDGE, GE_XINPUT, MYTHIX_DS4_GLYPHS="1")
-    s._apply_sony_input_env()
+    s.components["sony"].apply_env(s.env)
     assert "PROTON_SONY_AUTO_XINPUT" not in s.env
-    assert s.sony_mode.startswith("native PlayStation")
+    assert s.components["sony"].mode.startswith("native PlayStation")
 
 
 def test_user_choice_is_kept(session_for):
     s = session_for(BRIDGE, GE_XINPUT, PROTON_SONY_AUTO_XINPUT="0")
-    s._apply_sony_input_env()
+    s.components["sony"].apply_env(s.env)
     assert s.env["PROTON_SONY_AUTO_XINPUT"] == "0"
 
 
 @pytest.mark.parametrize("xinput", [LUNA_XINPUT, STOCK_XINPUT, None])
 def test_other_xinputs_are_left_alone(session_for, xinput):
     s = session_for(BRIDGE, xinput)
-    s._apply_sony_input_env()
+    s.components["sony"].apply_env(s.env)
     assert "PROTON_SONY_AUTO_XINPUT" not in s.env
 
 
 # ── steamclient DLLs for steam.exe launches ─────────────────────────────────
 
-def test_steamclient_dlls_installed_and_refreshed(neutron_mod, tmp_path, monkeypatch):
+def test_steamclient_dlls_installed_and_refreshed(session_for, tmp_path):
     steam = tmp_path / "steam"
     (steam / "legacycompat").mkdir(parents=True)
     for name in ("steamclient.dll", "steamclient64.dll"):
         (steam / "legacycompat" / name).write_bytes(b"MZ" + name.encode())
-    monkeypatch.setenv("STEAM_COMPAT_DATA_PATH", str(tmp_path / "compatdata"))
-    monkeypatch.setenv("STEAM_COMPAT_CLIENT_INSTALL_PATH", str(steam))
-    (tmp_path / "compatdata" / "pfx").mkdir(parents=True)
+    s = session_for(BRIDGE, STEAM_COMPAT_CLIENT_INSTALL_PATH=str(steam))
+    (tmp_path / "compatdata" / "pfx").mkdir()
 
-    cd = neutron_mod.CompatData()
-    cd._ensure_steamclient_dlls()
+    steam_c = s.components["steam"]
+    steam_c.ensure_steamclient_dlls()
     dst = tmp_path / "compatdata" / "pfx" / "drive_c" / "Program Files (x86)" / "Steam"
     assert (dst / "steamclient64.dll").read_bytes() == b"MZsteamclient64.dll"
     tracked = (tmp_path / "compatdata" / "tracked_files").read_text().splitlines()
@@ -164,12 +163,12 @@ def test_steamclient_dlls_installed_and_refreshed(neutron_mod, tmp_path, monkeyp
 
     # unchanged source → left alone; a Steam update → refreshed
     before = (dst / "steamclient.dll").stat().st_ino
-    cd._ensure_steamclient_dlls()
+    steam_c.ensure_steamclient_dlls()
     assert (dst / "steamclient.dll").stat().st_ino == before
     src = steam / "legacycompat" / "steamclient.dll"
     src.write_bytes(b"MZ-updated")
     os.utime(src, (src.stat().st_atime, src.stat().st_mtime + 60))
-    cd._ensure_steamclient_dlls()
+    steam_c.ensure_steamclient_dlls()
     assert (dst / "steamclient.dll").read_bytes() == b"MZ-updated"
     assert len((tmp_path / "compatdata" / "tracked_files").read_text().splitlines()) == 2
 
@@ -238,7 +237,7 @@ def poison_prefix(s, tmp_path):
 def test_sweep_quarantines_foreign_files(session_for, tmp_path):
     s = session_for(BRIDGE)
     pfx = poison_prefix(s, tmp_path)
-    assert s.compatdata._sweep_foreign_files(s.neutron) is True
+    assert s.compatdata._sweep_foreign_files(s) is True
     quarantine = Path(s.compatdata.quarantine_dir) / "drive_c"
     for rel in ("windows/system32/protontts.dll", "windows/syswow64/winscard.dll",
                 "vrclient/bin/vrclient_x64.dll"):
@@ -247,14 +246,14 @@ def test_sweep_quarantines_foreign_files(session_for, tmp_path):
     # our own links and user-native DLLs stay; a second pass has nothing to do
     assert (pfx / "windows" / "system32" / "kernel32.dll").is_symlink()
     assert (pfx / "windows" / "system32" / "d3d11.dll").read_bytes() == b"MZuser"
-    assert s.compatdata._sweep_foreign_files(s.neutron) is False
+    assert s.compatdata._sweep_foreign_files(s) is False
 
 
 def test_sweep_keeps_vrclient_when_build_ships_one(session_for, tmp_path):
     s = session_for(BRIDGE)
     ship_vrclient(s.neutron)
     pfx = poison_prefix(s, tmp_path)
-    s.compatdata._sweep_foreign_files(s.neutron)
+    s.compatdata._sweep_foreign_files(s)
     assert (pfx / "vrclient" / "bin" / "vrclient_x64.dll").exists()
 
 
@@ -335,6 +334,48 @@ def test_manifest_names_are_bare_dll_names(neutron_mod):
         assert set(layer.subdirs) == {"x64", "x86"}
         for dll in layer.dlls:
             assert dll.isidentifier() and not dll.endswith(".dll")
+
+
+# ── components ──────────────────────────────────────────────────────────────
+# A new integration is one Component subclass listed in COMPONENTS; the core
+# must reach every hook without being edited.
+
+def test_a_new_component_is_wired_everywhere(session_for, neutron_mod, monkeypatch, capsys):
+    calls = []
+
+    class Probe(neutron_mod.Component):
+        name = title = "probe"
+        def ld_paths(self): return ["/probe/lib"]
+        def apply_env(self, env): env.setdefault("PROBE", "1")
+        def overrides(self): return {"probe": "n"}
+        def install(self, track_file): calls.append("install")
+        def stray_files(self): return ("drive_c/probe.dll",)
+        def per_launch(self): calls.append("per_launch")
+        def diag(self, kv): kv("probe", "here")
+
+    monkeypatch.setattr(neutron_mod, "COMPONENTS", neutron_mod.COMPONENTS + (Probe,))
+    s = session_for(BRIDGE)
+    s.init_session(make_prefix=False)
+    assert s.env["PROBE"] == "1"
+    assert "probe=n" in s.env["WINEDLLOVERRIDES"].split(";")
+    assert "/probe/lib" in s.env["LD_LIBRARY_PATH"].split(":")
+
+    drive_c = Path(s.compatdata.prefix) / "drive_c"
+    drive_c.mkdir(parents=True)
+    (drive_c / "probe.dll").write_bytes(b"MZ")
+    assert s.compatdata._sweep_foreign_files(s)
+    assert not (drive_c / "probe.dll").exists()
+
+    s.compatdata._overlay_extras(s, None)
+    assert calls == ["install"]
+    with pytest.raises(SystemExit):
+        s.diag([])
+    assert "== probe ==" in capsys.readouterr().out
+
+
+def test_components_have_unique_names(neutron_mod):
+    names = [c.name for c in neutron_mod.COMPONENTS]
+    assert all(names) and len(set(names)) == len(names)
 
 
 # ── missing-comma lint ──────────────────────────────────────────────────────
