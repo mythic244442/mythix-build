@@ -257,3 +257,31 @@ def test_sweep_keeps_vrclient_when_build_ships_one(session_for, tmp_path):
     s.compatdata._sweep_foreign_files(s.neutron)
     assert (pfx / "vrclient" / "bin" / "vrclient_x64.dll").exists()
 
+
+# ── template diet ───────────────────────────────────────────────────────────
+# Byte-identical builtins in the template become relative links into lib/wine,
+# so clones stop duplicating ~500 MB; anything that differs stays a real file.
+
+def test_template_builtins_become_links(session_for):
+    s = session_for(BRIDGE)
+    n = s.neutron
+    Path(n.pe_syswow64).mkdir(parents=True, exist_ok=True)
+    (Path(n.pe_system32) / "kernel32.dll").write_bytes(b"MZ64")
+    (Path(n.pe_syswow64) / "kernel32.dll").write_bytes(b"MZ32")
+    (Path(n.pe_system32) / "ddraw.dll").write_bytes(b"MZbuiltin")
+    win = Path(n.default_pfx_dir) / "drive_c" / "windows"
+    (win / "system32" / "drivers").mkdir(parents=True)
+    (win / "syswow64").mkdir(parents=True)
+    (win / "system32" / "kernel32.dll").write_bytes(b"MZ64")
+    (win / "syswow64" / "kernel32.dll").write_bytes(b"MZ32")
+    (win / "system32" / "ddraw.dll").write_bytes(b"MZnative")
+    (win / "system32" / "notes.txt").write_text("x")
+
+    assert n._link_template_builtins(n.default_pfx_dir) == 2
+    for sub in ("system32", "syswow64"):
+        link = win / sub / "kernel32.dll"
+        assert link.is_symlink() and not os.path.isabs(os.readlink(link))
+    assert (win / "syswow64" / "kernel32.dll").read_bytes() == b"MZ32"
+    assert not (win / "system32" / "ddraw.dll").is_symlink()
+    assert not (win / "system32" / "notes.txt").is_symlink()
+    assert (Path(n.default_pfx_dir) / n._BUILTINS_LINKED).read_text() == "2\n"

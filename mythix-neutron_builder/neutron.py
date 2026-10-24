@@ -49,6 +49,7 @@
 import array
 import errno
 import fcntl
+import filecmp
 import fnmatch
 import json
 import os
@@ -731,12 +732,50 @@ class Neutron:
         except ValueError:
             return False
 
+    # Template diet: wineboot leaves a full copy of every builtin in the
+    # template, and every clone duplicated them (~500 MB per prefix on ext4).
+    # Byte-identical builtins become relative symlinks into lib/wine, as in
+    # Proton's template; _pfx_copy re-points them when cloning and the
+    # overlay already treats lib/wine links as builtins.
+    _BUILTINS_LINKED = ".builtins-linked"
+
+    def _link_template_builtins(self, pfx):
+        linked = 0
+        for sub, lib in (("system32", self.pe_system32),
+                         ("syswow64", self.pe_syswow64)):
+            root = os.path.join(pfx, "drive_c", "windows", sub)
+            for dirpath, _, files in os.walk(root):
+                for name in files:
+                    path = os.path.join(dirpath, name)
+                    src = os.path.join(lib, name)
+                    if os.path.islink(path) or not os.path.isfile(src):
+                        continue
+                    try:
+                        if not filecmp.cmp(path, src, shallow=False):
+                            continue
+                        # atomic swap: a concurrent clone never sees a gap
+                        tmp = path + ".link-tmp"
+                        os.symlink(os.path.relpath(src, dirpath), tmp)
+                        os.replace(tmp, path)
+                        linked += 1
+                    except OSError:
+                        pass
+        with open(os.path.join(pfx, self._BUILTINS_LINKED), "w") as f:
+            f.write(f"{linked}\n")
+        return linked
+
     def make_default_prefix(self, base_env, force=False):
         """Create the clone template transactionally with Mythix Wine.
         A failed wineboot never replaces an existing known-good template."""
         with self.dist_lock:
             stale = self.default_prefix_stale()
             if not force and not stale and not self.missing_default_prefix():
+                # a template from before the diet slims down once, in place
+                if not os.path.exists(os.path.join(self.default_pfx_dir,
+                                                   self._BUILTINS_LINKED)):
+                    log("linking default prefix template builtins...")
+                    n = self._link_template_builtins(self.default_pfx_dir)
+                    log(f"linked {n} template builtins into lib/wine")
                 return
             if force or stale:
                 log("regenerating default prefix template"
@@ -786,6 +825,7 @@ class Neutron:
                     detail = (boot.stderr or wait.stderr or "").strip()
                     die("Mythix Wine failed to create a complete default prefix"
                         + (f": {detail[-1200:]}" if detail else ""))
+                self._link_template_builtins(temp)
                 with open(os.path.join(temp, self._DEFAULT_PFX_STAMP), "w") as f:
                     f.write(CURRENT_PREFIX_VERSION + "\n")
 
@@ -1106,6 +1146,9 @@ class CompatData:
             n.lib_dir,
             n.default_pfx_dir,
             mtime_str(n.default_pfx_dir, "system.reg"),
+            # flips once when the template diet lands, so existing prefixes
+            # re-overlay and trade their builtin copies for links too
+            mtime_str(n.default_pfx_dir, n._BUILTINS_LINKED),
             dir_sig(n.pe_system32), dir_sig(n.pe_syswow64),
             dir_sig(os.path.join(n.dxvk_dir, "x64")) or dir_sig(os.path.join(n.dxvk_dir, "x86_64-windows")),
             dir_sig(os.path.join(n.dxvk_dir, "x32")) or dir_sig(os.path.join(n.dxvk_dir, "i386-windows")),
