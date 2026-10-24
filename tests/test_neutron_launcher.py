@@ -285,3 +285,75 @@ def test_template_builtins_become_links(session_for):
     assert not (win / "system32" / "ddraw.dll").is_symlink()
     assert not (win / "system32" / "notes.txt").is_symlink()
     assert (Path(n.default_pfx_dir) / n._BUILTINS_LINKED).read_text() == "2\n"
+
+
+# ── translation-layer manifest ──────────────────────────────────────────────
+# One manifest drives install, overrides, config_info and diag.
+
+def ship_layers(neutron, dxvk_sub="x86_64-windows"):
+    wine = Path(neutron.lib_dir) / "wine"
+    for sub, dlls in ((f"dxvk/{dxvk_sub}", ("d3d11", "dxgi")),
+                      ("vkd3d-proton/x86_64-windows", ("d3d12",))):
+        (wine / sub).mkdir(parents=True, exist_ok=True)
+        for dll in dlls:
+            (wine / sub / f"{dll}.dll").write_bytes(b"MZ")
+
+
+@pytest.mark.parametrize("dxvk_sub", ["x64", "x86_64-windows"])
+def test_overrides_follow_manifest(session_for, dxvk_sub):
+    s = session_for(BRIDGE)
+    ship_layers(s.neutron, dxvk_sub)
+    s._build_dll_overrides()
+    combined = s.env["WINEDLLOVERRIDES"]
+    for dll in ("d3d11", "dxgi", "d3d12"):
+        assert f"{dll}=" in combined
+    assert "d3d9=" not in combined  # not shipped by this build
+
+
+def test_wined3d_drops_dxvk_but_keeps_vkd3d(session_for):
+    s = session_for(BRIDGE, STEAM_COMPAT_CONFIG="wined3d")
+    ship_layers(s.neutron)
+    s._build_dll_overrides()
+    combined = s.env["WINEDLLOVERRIDES"]
+    assert "d3d11=" not in combined and "dxgi=" not in combined
+    assert "d3d12=" in combined
+
+
+def test_config_info_tracks_wine_style_dxvk_dir(session_for, neutron_mod):
+    # dir_sig() returns "0" (truthy) for a missing dir, so the old
+    # `sig(x64) or sig(x86_64-windows)` never looked at the second layout
+    s = session_for(BRIDGE)
+    ship_layers(s.neutron, "x86_64-windows")
+    before = s.compatdata._compute_config_info(s)
+    dll = Path(s.neutron.lib_dir) / "wine" / "dxvk" / "x86_64-windows" / "d3d11.dll"
+    os.utime(dll, (dll.stat().st_atime, dll.stat().st_mtime + 60))
+    assert s.compatdata._compute_config_info(s) != before
+
+
+def test_manifest_names_are_bare_dll_names(neutron_mod):
+    for layer in neutron_mod.TRANSLATION_LAYERS:
+        assert set(layer.subdirs) == {"x64", "x86"}
+        for dll in layer.dlls:
+            assert dll.isidentifier() and not dll.endswith(".dll")
+
+
+# ── missing-comma lint ──────────────────────────────────────────────────────
+# Python glues adjacent string literals together, so ("d3d11.dll" "dxgi.dll")
+# is one string. Flag two adjacent name-like literals (no spaces) — log
+# messages split across lines contain spaces and are left alone.
+
+def test_no_adjacent_name_literals():
+    import ast
+    import io
+    import tokenize
+    toks = [t for t in tokenize.generate_tokens(io.StringIO(NEUTRON_PY.read_text()).readline)
+            if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT,
+                              tokenize.INDENT, tokenize.DEDENT)]
+    suspects = []
+    for a, b in zip(toks, toks[1:]):
+        if a.type == b.type == tokenize.STRING and not a.string[:1] in "fFbB" \
+                and not b.string[:1] in "fFbB":
+            va, vb = ast.literal_eval(a.string), ast.literal_eval(b.string)
+            if va and vb and " " not in va + vb:
+                suspects.append(f"line {a.start[0]}: {a.string} {b.string}")
+    assert not suspects, "missing comma?\n" + "\n".join(suspects)

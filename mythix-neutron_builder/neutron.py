@@ -47,6 +47,7 @@
 # Control knobs are NEUTRON_* (the proton bundle reads PROTON_* via rebrand).
 
 import array
+import collections
 import errno
 import fcntl
 import filecmp
@@ -597,6 +598,34 @@ def find_nvidia_wine_dll_dir():
     return None
 
 
+# ── Bundled translation layers ───────────────────────────────────────────────
+# The one place that says which DLLs each layer ships and where. The overlay,
+# the wined3d restore, the DLL overrides, config_info and diag all read it;
+# they used to keep their own copies of these lists, which is how a missing
+# comma once glued "dxgi.dll" onto its neighbour in just one of them.
+TranslationLayer = collections.namedtuple(
+    "TranslationLayer", "name dir subdirs dlls wined3d_off")
+
+TRANSLATION_LAYERS = (
+    # older DXVK drops use x64/x32, newer ones Wine's arch dir names
+    TranslationLayer(
+        name="DXVK", dir="dxvk",
+        subdirs={"x64": ("x64", "x86_64-windows"), "x86": ("x32", "i386-windows")},
+        dlls=("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi", "openvr_api_dxvk"),
+        wined3d_off=True),
+    # VKD3D-Proton owns the D3D12 pair independently of DXVK/WineD3D
+    TranslationLayer(
+        name="VKD3D-Proton", dir="vkd3d-proton",
+        subdirs={"x64": ("x86_64-windows",), "x86": ("i386-windows",)},
+        dlls=("d3d12", "d3d12core"),
+        wined3d_off=False),
+)
+
+# Where each arch's DLLs land in a prefix (WoW64 layout)
+PREFIX_ARCH_DIRS = (("x64", "drive_c/windows/system32"),
+                    ("x86", "drive_c/windows/syswow64"))
+
+
 # ── The Neutron distribution (Wine build + helpers) ─────────────
 class Neutron:
     """Resolves paths into the bundled `files/` tree and installs DLLs."""
@@ -700,6 +729,22 @@ class Neutron:
             except OSError:
                 return False
         return True
+
+    def layer_dir(self, layer, arch):
+        """A translation layer's bundled DLL dir for "x64"/"x86", or None."""
+        for sub in layer.subdirs[arch]:
+            d = os.path.join(self.lib_dir, "wine", layer.dir, sub)
+            if os.path.isdir(d):
+                return d
+        return None
+
+    def layer_dlls(self, layer, arch):
+        """(name, path) of each manifest DLL this build ships for arch."""
+        d = self.layer_dir(layer, arch)
+        if not d:
+            return []
+        return [(dll, os.path.join(d, dll + ".dll")) for dll in layer.dlls
+                if os.path.isfile(os.path.join(d, dll + ".dll"))]
 
     def has_vrclient(self):
         """True when this build ships its own vrclient (PE and unix halves).
@@ -1059,31 +1104,18 @@ class CompatData:
             installed.append(dll)
 
         # WineD3D is an explicit request to use Wine's OpenGL Direct3D path,
-        # so don't place DXVK DLLs where they would override it — and put the
-        # Wine builtins back over any DXVK copies Neutron itself installed
-        # earlier (user-installed natives are left alone, as everywhere).
-        dxvk_dlls = ("d3d8.dll", "d3d9.dll", "d3d10core.dll",
-                     "d3d11.dll", "dxgi.dll", "openvr_api_dxvk.dll")
-        if "wined3d" not in session.compat_config:
-            for archs, dst in ((("x64", "x86_64-windows"), "drive_c/windows/system32"),
-                               (("x32", "i386-windows"), "drive_c/windows/syswow64")):
-                src_dir = None
-                for arch in archs:
-                    candidate = os.path.join(n.dxvk_dir, arch)
-                    if os.path.isdir(candidate):
-                        src_dir = candidate
-                        break
-                if not src_dir:
+        # so a layer marked wined3d_off (DXVK) isn't placed where it would
+        # override it — and the Wine builtins go back over copies Neutron
+        # itself installed earlier (user-installed natives are left alone).
+        wined3d = "wined3d" in session.compat_config
+        for layer in TRANSLATION_LAYERS:
+            for arch, dst_dir in PREFIX_ARCH_DIRS:
+                if not (wined3d and layer.wined3d_off):
+                    for dll, src in n.layer_dlls(layer, arch):
+                        install(src, dst_dir, dll + ".dll")
                     continue
-                for dll in dxvk_dlls:
-                    src = os.path.join(src_dir, dll)
-                    if os.path.isfile(src):
-                        install(src, dst, dll)
-        else:
-            for dst_dir in ("drive_c/windows/system32",
-                            "drive_c/windows/syswow64"):
-                for dll in dxvk_dlls:
-                    rel = dst_dir + "/" + dll
+                for dll in layer.dlls:
+                    rel = f"{dst_dir}/{dll}.dll"
                     dst = os.path.join(self.prefix, rel)
                     builtin = os.path.join(n.default_pfx_dir, rel)
                     if self._is_our_translation_dll(rel, ours) and \
@@ -1092,15 +1124,6 @@ class CompatData:
                         os.remove(dst)
                         self._pfx_copy(builtin, dst)
                         ours.pop(rel, None)
-
-        # VKD3D-Proton owns the D3D12 pair independently of DXVK/WineD3D.
-        for arch, dst in (("x86_64-windows", "drive_c/windows/system32"),
-                          ("i386-windows", "drive_c/windows/syswow64")):
-            src_dir = os.path.join(n.vkd3d_dir, arch)
-            for dll in ("d3d12.dll", "d3d12core.dll"):
-                src = os.path.join(src_dir, dll)
-                if os.path.isfile(src):
-                    install(src, dst, dll)
 
         try:
             with open(self.translation_files_file, "w") as f:
@@ -1150,10 +1173,8 @@ class CompatData:
             # re-overlay and trade their builtin copies for links too
             mtime_str(n.default_pfx_dir, n._BUILTINS_LINKED),
             dir_sig(n.pe_system32), dir_sig(n.pe_syswow64),
-            dir_sig(os.path.join(n.dxvk_dir, "x64")) or dir_sig(os.path.join(n.dxvk_dir, "x86_64-windows")),
-            dir_sig(os.path.join(n.dxvk_dir, "x32")) or dir_sig(os.path.join(n.dxvk_dir, "i386-windows")),
-            dir_sig(os.path.join(n.vkd3d_dir, "x86_64-windows")),
-            dir_sig(os.path.join(n.vkd3d_dir, "i386-windows")),
+            *(dir_sig(n.layer_dir(layer, arch) or "")
+              for layer in TRANSLATION_LAYERS for arch, _ in PREFIX_ARCH_DIRS),
             # steamclient mtime tracking removed (DLLs no longer copied)
             session.builtin_dll_copy,
             str("wined3d" in cc),
@@ -2163,14 +2184,11 @@ class Session:
         # profile's style ("n" = native-only like Proton, no silent fallback).
         n = self.neutron
         style = profile()["d3d_override"]
-        if "wined3d" not in self.compat_config:
-            for dll in ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi", "openvr_api_dxvk"):
-                if (os.path.isfile(os.path.join(n.dxvk_dir, "x64", dll + ".dll"))
-                    or os.path.isfile(os.path.join(n.dxvk_dir, "x86_64-windows", dll + ".dll"))):
-                    overrides[dll] = style
-        for dll in ("d3d12", "d3d12core"):
-            if os.path.isfile(os.path.join(n.vkd3d_dir, "x86_64-windows",
-                                           dll + ".dll")):
+        wined3d = "wined3d" in self.compat_config
+        for layer in TRANSLATION_LAYERS:
+            if wined3d and layer.wined3d_off:
+                continue
+            for dll, _ in n.layer_dlls(layer, "x64"):
                 overrides[dll] = style
 
         # Proton's steam.exe helper (registers the Steam client for the game)
@@ -2530,21 +2548,21 @@ class Session:
 
         section("translation layers (bundled)")
         found = False
-        for label, base, dirs in (
-                ("DXVK", n.dxvk_dir, (("x64", "x64"), ("x32", "x86"))),
-                ("VKD3D-Proton", n.vkd3d_dir,
-                 (("x86_64-windows", "x64"), ("i386-windows", "x86")))):
-            for sub, expect in dirs:
-                d = os.path.join(base, sub)
-                if not os.path.isdir(d):
+        for layer in TRANSLATION_LAYERS:
+            for arch, _ in PREFIX_ARCH_DIRS:
+                d = n.layer_dir(layer, arch)
+                if not d:
                     continue
                 found = True
+                sub = os.path.basename(d)
                 for dll in sorted(os.listdir(d)):
                     if not dll.lower().endswith(".dll"):
                         continue
-                    problem = check_translation_dll(os.path.join(d, dll), expect)
-                    kv(f"{label} {sub}/{dll}", "ok" if problem is None
-                       else f"BAD — {problem}")
+                    problem = check_translation_dll(os.path.join(d, dll), arch)
+                    shipped = dll.lower()[:-4] in layer.dlls
+                    kv(f"{layer.name} {sub}/{dll}",
+                       ("ok" if problem is None else f"BAD — {problem}")
+                       + ("" if shipped else " (not in manifest, never installed)"))
         if not found:
             kv("(none)", "no bundled DXVK/VKD3D-Proton dirs under files/lib/wine")
         kv("overrides style", profile()["d3d_override"]
