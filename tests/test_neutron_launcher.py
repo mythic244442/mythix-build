@@ -188,10 +188,72 @@ def test_foreign_vrclient_disabled_when_build_ships_none(session_for):
     assert "vrclient_x64=" in combined
 
 
+def ship_vrclient(neutron, unix=True):
+    (Path(neutron.pe_system32) / "vrclient_x64.dll").write_bytes(b"MZvrclient")
+    if unix:
+        Path(neutron.unix_dir).mkdir(parents=True, exist_ok=True)
+        (Path(neutron.unix_dir) / "vrclient.so").write_bytes(b"\x7fELF")
+
+
 def test_own_vrclient_stays_enabled(session_for):
     s = session_for(BRIDGE)
-    (Path(s.neutron.pe_system32) / "vrclient_x64.dll").write_bytes(b"MZvrclient")
+    ship_vrclient(s.neutron)
     s._build_dll_overrides()
     combined = s.env.get("WINEDLLOVERRIDES", "")
     assert "vrclient=" not in combined
     assert "vrclient_x64=" not in combined
+
+
+def test_vrclient_without_unix_half_is_disabled(session_for):
+    s = session_for(BRIDGE)
+    ship_vrclient(s.neutron, unix=False)
+    s._build_dll_overrides()
+    assert "vrclient_x64=" in s.env.get("WINEDLLOVERRIDES", "")
+
+
+# ── foreign-tool sweep ──────────────────────────────────────────────────────
+# A Proton run symlinks its DLLs into the prefix, pointing into its own
+# lib/wine. Names our template doesn't cover survive every overlay, so the
+# sweep moves them (and a foreign vrclient/vrpath) to foreign-quarantine.
+
+def poison_prefix(s, tmp_path):
+    pfx = Path(s.compatdata.prefix) / "drive_c"
+    sys32, wow = pfx / "windows" / "system32", pfx / "windows" / "syswow64"
+    sys32.mkdir(parents=True)
+    wow.mkdir(parents=True)
+    other = tmp_path / "GE-Proton" / "files" / "lib" / "wine"
+    (other / "x86_64-windows").mkdir(parents=True)
+    (other / "x86_64-windows" / "protontts.dll").write_bytes(b"MZ")
+    (sys32 / "protontts.dll").symlink_to(other / "x86_64-windows" / "protontts.dll")
+    (wow / "winscard.dll").symlink_to(tmp_path / "gone" / "lib" / "wine" / "i386-windows" / "winscard.dll")
+    ours = Path(s.neutron.pe_system32) / "kernel32.dll"
+    ours.write_bytes(b"MZ")
+    (sys32 / "kernel32.dll").symlink_to(ours)
+    (sys32 / "d3d11.dll").write_bytes(b"MZuser")
+    (pfx / "vrclient" / "bin").mkdir(parents=True)
+    (pfx / "vrclient" / "bin" / "vrclient_x64.dll").write_bytes(b"MZ")
+    return pfx
+
+
+def test_sweep_quarantines_foreign_files(session_for, tmp_path):
+    s = session_for(BRIDGE)
+    pfx = poison_prefix(s, tmp_path)
+    assert s.compatdata._sweep_foreign_files(s.neutron) is True
+    quarantine = Path(s.compatdata.quarantine_dir) / "drive_c"
+    for rel in ("windows/system32/protontts.dll", "windows/syswow64/winscard.dll",
+                "vrclient/bin/vrclient_x64.dll"):
+        assert not os.path.lexists(pfx / rel)
+        assert os.path.lexists(quarantine / rel)
+    # our own links and user-native DLLs stay; a second pass has nothing to do
+    assert (pfx / "windows" / "system32" / "kernel32.dll").is_symlink()
+    assert (pfx / "windows" / "system32" / "d3d11.dll").read_bytes() == b"MZuser"
+    assert s.compatdata._sweep_foreign_files(s.neutron) is False
+
+
+def test_sweep_keeps_vrclient_when_build_ships_one(session_for, tmp_path):
+    s = session_for(BRIDGE)
+    ship_vrclient(s.neutron)
+    pfx = poison_prefix(s, tmp_path)
+    s.compatdata._sweep_foreign_files(s.neutron)
+    assert (pfx / "vrclient" / "bin" / "vrclient_x64.dll").exists()
+

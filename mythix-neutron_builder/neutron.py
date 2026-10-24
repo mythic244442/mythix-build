@@ -28,6 +28,9 @@
 #   - per-prefix MachineGuid regeneration when cloning the template
 #   - NVIDIA nvngx/DLSS DLL discovery + NVIDIA_WINE_DLL_DIR
 #   - OpenVR openvrpaths.vrpath rewriting into the prefix
+#   (Neutron's own) foreign-tool sweep: DLL symlinks a Proton/GE run leaves
+#   in system32/syswow64, plus its vrclient when this build has none, are
+#   quarantined to <compatdata>/foreign-quarantine every launch
 #   - game / Steam-library DOS drives (s: / t:)
 #   - WoW64 mode toggle, user_settings.py overrides, an extensible
 #     compat_config framework, and NEUTRON_LOG logging + health warnings
@@ -623,6 +626,7 @@ class Neutron:
         self.default_pfx_dir = os.path.join(self.share_dir, "default_pfx")
 
         self.version_file = os.path.join(neutron_dir, "version")
+        self.unix_dir = os.path.join(self.lib_dir, "wine", "x86_64-unix")
         # Facts from the builder (build mode, profile, Wayland default, ...)
         self.build_info = load_build_info(os.path.join(neutron_dir, "build-info"))
         self.dxvk_conf = os.path.join(self.files_dir, "dxvk.conf")
@@ -695,6 +699,15 @@ class Neutron:
             except OSError:
                 return False
         return True
+
+    def has_vrclient(self):
+        """True when this build ships its own vrclient (PE and unix halves).
+        Without it, any vrclient in a prefix came from another compat tool and
+        crashes against our Wine; NEUTRON_FORCE_VR=1 trusts it anyway."""
+        if os.environ.get("NEUTRON_FORCE_VR") == "1":
+            return True
+        return os.path.isfile(os.path.join(self.pe_system32, "vrclient_x64.dll")) \
+            and os.path.isfile(os.path.join(self.unix_dir, "vrclient.so"))
 
     def missing_default_prefix(self):
         """True when no structurally complete template exists."""
@@ -848,6 +861,16 @@ class CompatData:
         "drive_c/windows/syswow64/libvkd3d-shader-1.dll",
     ]
 
+    # Where another compat tool's leftovers are looked for each launch
+    FOREIGN_SCAN_DIRS = ("drive_c/windows/system32", "drive_c/windows/syswow64")
+    VR_FILES = (
+        "drive_c/windows/system32/vrclient_x64.dll",
+        "drive_c/windows/syswow64/vrclient.dll",
+        "drive_c/vrclient/bin/vrclient_x64.dll",
+        "drive_c/vrclient/bin/vrclient.dll",
+        "drive_c/users/steamuser/AppData/Local/openvr/openvrpaths.vrpath",
+    )
+
     def __init__(self):
         self.compat_data = os.environ.get("STEAM_COMPAT_DATA_PATH", "")
         if not self.compat_data:
@@ -868,6 +891,9 @@ class CompatData:
         self.creation_sync_guard = os.path.join(self.prefix,
                                                 "creation_sync_guard")
         self.lock = FileLock(os.path.join(self.compat_data, "pfx.lock"))
+        # Other tools' files pulled out of the prefix, kept at their prefix-
+        # relative paths so a move back restores them exactly.
+        self.quarantine_dir = os.path.join(self.compat_data, "foreign-quarantine")
         self.old_machine_guid = None
 
     # — casefold —
@@ -997,7 +1023,7 @@ class CompatData:
         # Wine builtins back over any DXVK copies Neutron itself installed
         # earlier (user-installed natives are left alone, as everywhere).
         dxvk_dlls = ("d3d8.dll", "d3d9.dll", "d3d10core.dll",
-                     "d3d11.dll", "dxgi.dll")
+                     "d3d11.dll", "dxgi.dll", "openvr_api_dxvk.dll")
         if "wined3d" not in session.compat_config:
             for archs, dst in ((("x64", "x86_64-windows"), "drive_c/windows/system32"),
                                (("x32", "i386-windows"), "drive_c/windows/syswow64")):
@@ -1104,6 +1130,58 @@ class CompatData:
                     os.remove(path)
                 except OSError:
                     pass
+
+    # — another compat tool's leftovers (Proton, GE, an older Neutron) —
+    # Proton symlinks its DLLs into any prefix it runs in, pointing into ITS
+    # lib/wine. Names our template covers get replaced by the next overlay,
+    # but the rest (vrclient, protontts, winegstreamer, icu...) survive it, and
+    # Wine then loads that tool's PE against our ntdll without its unix half.
+    # Move them out (reversibly) every launch; True = overlay should re-run so
+    # anything we pulled that we do ship gets our own copy back.
+    def _quarantine(self, rel):
+        src = os.path.join(self.prefix, rel)
+        dst = os.path.join(self.quarantine_dir, rel)
+        makedirs(os.path.dirname(dst))
+        try:
+            if file_exists(dst, follow_symlinks=False):
+                os.remove(dst)
+            shutil.move(src, dst)
+            return True
+        except OSError as e:
+            log(f"warning: could not quarantine {rel}: {e.strerror}")
+            return False
+
+    def _sweep_foreign_files(self, neutron):
+        own = os.path.realpath(neutron.dir) + os.sep
+        moved = []
+        for d in self.FOREIGN_SCAN_DIRS:
+            try:
+                with os.scandir(os.path.join(self.prefix, d)) as it:
+                    links = [e for e in it if e.is_symlink()]
+            except OSError:
+                continue
+            for e in links:
+                try:
+                    target = os.readlink(e.path)
+                except OSError:
+                    continue
+                if "/lib/wine/" not in target and "/lib64/wine/" not in target:
+                    continue
+                if os.path.realpath(e.path).startswith(own):
+                    continue
+                if self._quarantine(d + "/" + e.name):
+                    moved.append(e.name)
+        if not neutron.has_vrclient():
+            for rel in self.VR_FILES:
+                if file_exists(os.path.join(self.prefix, rel),
+                               follow_symlinks=False) and self._quarantine(rel):
+                    moved.append(os.path.basename(rel))
+        if moved:
+            names = sorted(set(moved))
+            shown = ", ".join(names[:12]) + (" ..." if len(names) > 12 else "")
+            log(f"quarantined {len(moved)} file(s) another compat tool left "
+                f"in this prefix ({shown}) -> {self.quarantine_dir}")
+        return bool(moved)
 
     # — copy one template entry into the prefix (symlink or reflink copy) —
     def _pfx_copy(self, src, dst, dll_copy=False):
@@ -1312,6 +1390,10 @@ class CompatData:
                 if not file_exists(link, follow_symlinks=False):
                     os.symlink(target, link)
 
+            # before the overlay decision, so whatever we pull out that we
+            # ship gets our own copy back on this same launch
+            swept = not first_init and self._sweep_foreign_files(n)
+
             # versioned DLL overlay — only when something relevant changed
             config_info = self._compute_config_info(session)
             old_config = ""
@@ -1321,7 +1403,7 @@ class CompatData:
                 except OSError:
                     pass
 
-            if first_init or old_ver != CURRENT_PREFIX_VERSION \
+            if first_init or swept or old_ver != CURRENT_PREFIX_VERSION \
                     or old_config != config_info:
                 log("updating prefix runtime DLLs...")
                 if not first_init:
@@ -1377,6 +1459,10 @@ class CompatData:
     # — OpenVR: rewrite openvrpaths.vrpath into the prefix, capture runtime —
     def _setup_openvr(self, session):
         env = session.env
+        # No vrclient of our own: a vrpath would only lead DXVK's openvr
+        # bridge to one (the sweep keeps other tools' copies out)
+        if not session.neutron.has_vrclient():
+            return
         if "VR_PATHREG_OVERRIDE" in env:
             src = env["VR_PATHREG_OVERRIDE"]
         elif "XDG_CONFIG_HOME" in env:
@@ -2035,7 +2121,7 @@ class Session:
         n = self.neutron
         style = profile()["d3d_override"]
         if "wined3d" not in self.compat_config:
-            for dll in ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi"):
+            for dll in ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi", "openvr_api_dxvk"):
                 if (os.path.isfile(os.path.join(n.dxvk_dir, "x64", dll + ".dll"))
                     or os.path.isfile(os.path.join(n.dxvk_dir, "x86_64-windows", dll + ".dll"))):
                     overrides[dll] = style
@@ -2052,14 +2138,10 @@ class Session:
         if self.use_wayland:
             overrides["winewayland.drv"] = "b"
 
-        # Disable VR client DLLs — Proton's copies assert without the OpenVR
-        # registry state only Proton sets up, so a vrclient left in the prefix
-        # by another tool kills any game that touches OpenVR at startup. Only
-        # a build that ships its own vrclient (found in pe_system32, the same
-        # check _install_vr_dlls uses) is allowed to run one.
-        ships_vrclient = os.path.isfile(
-            os.path.join(n.pe_system32, "vrclient_x64.dll"))
-        if os.environ.get("NEUTRON_ATOM_PROTON") or not ships_vrclient:
+        # Disable VR client DLLs unless this build ships its own — another
+        # tool's copy (a Proton that ran in the prefix, or the atom container)
+        # crashes against our Wine as soon as DXVK's openvr bridge loads it
+        if os.environ.get("NEUTRON_ATOM_PROTON") or not n.has_vrclient():
             overrides["vrclient"] = ""
             overrides["vrclient_x64"] = ""
 
