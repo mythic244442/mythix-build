@@ -1,26 +1,35 @@
 """Launcher decisions that depend on the host: steam.exe launches and Sony pads.
 
-neutron.py is a standalone script shipped inside every package, so it is
-loaded from its file rather than imported as a package module.
+Every package ships the `neutron` entry script (neutron.py here) with the
+neutron_lib/ package next to it; the tests import neutron_lib from the
+builder directory the same way the entry script does.
 """
 
-import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-NEUTRON_PY = Path(__file__).resolve().parent.parent / "mythix-neutron_builder" / "neutron.py"
+BUILDER = Path(__file__).resolve().parent.parent / "mythix-neutron_builder"
+NEUTRON_PY = BUILDER / "neutron.py"
+LAUNCHER_SOURCES = [NEUTRON_PY, *sorted((BUILDER / "neutron_lib").rglob("*.py"))]
 
 
 @pytest.fixture(scope="module")
 def neutron_mod():
-    spec = importlib.util.spec_from_file_location("neutron_launcher", NEUTRON_PY)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, str(BUILDER))
+    from neutron_lib import components, dist, prefix, session
+    from neutron_lib.components import steam
+    # classes by name; patch hooks on the module that looks them up
+    return SimpleNamespace(
+        Neutron=dist.Neutron, CompatData=prefix.CompatData, Session=session.Session,
+        TRANSLATION_LAYERS=dist.TRANSLATION_LAYERS, Component=components.Component,
+        components=components, steam=steam)
 
 
 def make_package(root: Path, build_info: str = "", xinput: bytes | None = None) -> Path:
@@ -60,34 +69,34 @@ BRIDGE = "STEAM_BRIDGE=ge\nWAYLAND=1\n"
 # ── steam.exe launches ──────────────────────────────────────────────────────
 
 def test_mythix_launcher_hex_id_launches_directly(session_for, neutron_mod, monkeypatch):
-    monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: True)
+    monkeypatch.setattr(neutron_mod.steam, "steam_client_running", lambda: True)
     s = session_for(BRIDGE, SteamGameId="78da8e29", SteamAppId="78da8e29")
     assert not s.components["steam"].use_shim
     assert "78da8e29" in s.components["steam"].shim_reason
 
 
 def test_steam_app_without_steam_client_launches_directly(session_for, neutron_mod, monkeypatch):
-    monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: False)
+    monkeypatch.setattr(neutron_mod.steam, "steam_client_running", lambda: False)
     s = session_for(BRIDGE, SteamGameId="1091500")
     assert not s.components["steam"].use_shim
     assert "not running" in s.components["steam"].shim_reason
 
 
 def test_steam_app_with_steam_client_uses_steam_exe(session_for, neutron_mod, monkeypatch):
-    monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: True)
+    monkeypatch.setattr(neutron_mod.steam, "steam_client_running", lambda: True)
     s = session_for(BRIDGE, SteamGameId="1091500")
     assert s.components["steam"].use_shim
 
 
 def test_no_bridge_build_never_auto_uses_steam_exe(session_for, neutron_mod, monkeypatch):
-    monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: True)
+    monkeypatch.setattr(neutron_mod.steam, "steam_client_running", lambda: True)
     s = session_for("WAYLAND=1\n", SteamGameId="1091500")
     assert not s.components["steam"].use_shim
 
 
 @pytest.mark.parametrize(("knob", "expected"), [("0", False), ("1", True)])
 def test_shim_knob_overrides(session_for, neutron_mod, monkeypatch, knob, expected):
-    monkeypatch.setattr(neutron_mod, "steam_client_running", lambda: not expected)
+    monkeypatch.setattr(neutron_mod.steam, "steam_client_running", lambda: not expected)
     s = session_for(BRIDGE, SteamGameId="1091500", NEUTRON_USE_STEAM_SHIM=knob)
     assert s.components["steam"].use_shim is expected
 
@@ -96,16 +105,16 @@ def test_steam_client_running_reads_pid_file(neutron_mod, tmp_path, monkeypatch)
     home = tmp_path / "home"
     (home / ".steam").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-    assert not neutron_mod.steam_client_running()          # no pid file
+    assert not neutron_mod.steam.steam_client_running()          # no pid file
 
     fake_steam = tmp_path / "steam"                         # /proc/<pid>/comm == "steam"
     fake_steam.symlink_to(Path(sys.executable).resolve())
     proc = subprocess.Popen([str(fake_steam), "-c", "import time; time.sleep(30)"])
     try:
         (home / ".steam" / "steam.pid").write_text(f"{proc.pid}\n")
-        assert neutron_mod.steam_client_running()
+        assert neutron_mod.steam.steam_client_running()
         (home / ".steam" / "steam.pid").write_text(f"{os.getpid()}\n")   # not steam
-        assert not neutron_mod.steam_client_running()
+        assert not neutron_mod.steam.steam_client_running()
     finally:
         proc.kill()
         proc.wait()
@@ -353,7 +362,8 @@ def test_a_new_component_is_wired_everywhere(session_for, neutron_mod, monkeypat
         def per_launch(self): calls.append("per_launch")
         def diag(self, kv): kv("probe", "here")
 
-    monkeypatch.setattr(neutron_mod, "COMPONENTS", neutron_mod.COMPONENTS + (Probe,))
+    monkeypatch.setattr(neutron_mod.components, "COMPONENTS",
+                        neutron_mod.components.COMPONENTS + (Probe,))
     s = session_for(BRIDGE)
     s.init_session(make_prefix=False)
     assert s.env["PROBE"] == "1"
@@ -374,7 +384,7 @@ def test_a_new_component_is_wired_everywhere(session_for, neutron_mod, monkeypat
 
 
 def test_components_have_unique_names(neutron_mod):
-    names = [c.name for c in neutron_mod.COMPONENTS]
+    names = [c.name for c in neutron_mod.components.COMPONENTS]
     assert all(names) and len(set(names)) == len(names)
 
 
@@ -387,14 +397,62 @@ def test_no_adjacent_name_literals():
     import ast
     import io
     import tokenize
-    toks = [t for t in tokenize.generate_tokens(io.StringIO(NEUTRON_PY.read_text()).readline)
-            if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT,
-                              tokenize.INDENT, tokenize.DEDENT)]
     suspects = []
-    for a, b in zip(toks, toks[1:]):
-        if a.type == b.type == tokenize.STRING and not a.string[:1] in "fFbB" \
-                and not b.string[:1] in "fFbB":
-            va, vb = ast.literal_eval(a.string), ast.literal_eval(b.string)
-            if va and vb and " " not in va + vb:
-                suspects.append(f"line {a.start[0]}: {a.string} {b.string}")
+    for path in LAUNCHER_SOURCES:
+        toks = [t for t in tokenize.generate_tokens(io.StringIO(path.read_text()).readline)
+                if t.type not in (tokenize.NL, tokenize.NEWLINE, tokenize.COMMENT,
+                                  tokenize.INDENT, tokenize.DEDENT)]
+        for a, b in zip(toks, toks[1:]):
+            if a.type == b.type == tokenize.STRING and not a.string[:1] in "fFbB" \
+                    and not b.string[:1] in "fFbB":
+                va, vb = ast.literal_eval(a.string), ast.literal_eval(b.string)
+                if va and vb and " " not in va + vb:
+                    suspects.append(f"{path.relative_to(BUILDER)}:{a.start[0]}: "
+                                    f"{a.string} {b.string}")
     assert not suspects, "missing comma?\n" + "\n".join(suspects)
+
+
+# ── packaged layout ─────────────────────────────────────────────────────────
+# What neutron-package.sh ships: `neutron` (the entry script, its fallback
+# schema stamped by sed) with neutron_lib/ beside it.
+
+def install_tool(tmp_path, fallback=None):
+    pkg = make_package(tmp_path)
+    (pkg / "version").unlink()
+    (pkg / "files" / "bin").mkdir(parents=True)
+    (pkg / "files" / "bin" / "wine").write_text("#!/bin/sh\n")
+    entry = NEUTRON_PY.read_text()
+    if fallback:
+        entry = entry.replace('FALLBACK_PREFIX_VERSION = "mythix-neutron-0.0"',
+                              f'FALLBACK_PREFIX_VERSION = "{fallback}"')
+    (pkg / "neutron").write_text(entry)
+    shutil.copytree(BUILDER / "neutron_lib", pkg / "neutron_lib",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    return pkg
+
+
+def run_tool(pkg, tmp_path, *args):
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("STEAM", "Steam", "PYTHON"))}
+    env.update(NEUTRON_NO_CONTAINER="1", HOME=str(tmp_path / "home"),
+               STEAM_COMPAT_DATA_PATH=str(tmp_path / "cd"))
+    return subprocess.run([sys.executable, str(pkg / "neutron"), *args], env=env,
+                          capture_output=True, text=True, timeout=60)
+
+
+def test_packaged_entry_runs_diag(tmp_path):
+    pkg = install_tool(tmp_path, fallback="Mythix-Neutron-11.19-9")
+    r = run_tool(pkg, tmp_path, "diag")
+    assert r.returncode == 0, r.stderr
+    for title in ("translation layers (bundled)", "steam", "vr", "nvidia",
+                  "sony controllers"):
+        assert f"== {title} ==" in r.stdout
+    assert "Mythix-Neutron-11.19-9 (from fallback)" in r.stdout
+    assert not list(pkg.rglob("__pycache__"))
+
+
+def test_entry_without_package_says_so(tmp_path):
+    pkg = install_tool(tmp_path)
+    shutil.rmtree(pkg / "neutron_lib")
+    r = run_tool(pkg, tmp_path, "diag")
+    assert r.returncode != 0 and "neutron_lib package" in r.stderr

@@ -496,7 +496,15 @@ if [ ! -f "$_launcher_src" ]; then
 fi
 cp -f "$_launcher_src" "${NEUTRON_PACKAGE_DIR}/neutron"
 chmod +x "${NEUTRON_PACKAGE_DIR}/neutron"
-ok "neutron launcher installed ($(wc -l < "$_launcher_src") lines)"
+# the launcher itself; `neutron` is only its entry point
+_launcher_lib="${_script_dir}/neutron_lib"
+if [ ! -f "${_launcher_lib}/main.py" ]; then
+    err "neutron_lib/ not found alongside packager: $_launcher_lib"
+fi
+rm -rf "${NEUTRON_PACKAGE_DIR}/neutron_lib"
+cp -r "$_launcher_lib" "${NEUTRON_PACKAGE_DIR}/neutron_lib"
+find "${NEUTRON_PACKAGE_DIR}/neutron_lib" -name __pycache__ -prune -exec rm -rf {} +
+ok "neutron launcher installed ($(cat "$_launcher_src" "${_launcher_lib}"/*.py "${_launcher_lib}"/components/*.py | wc -l) lines)"
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  Write version file (read by the Python launcher for prefix versioning)

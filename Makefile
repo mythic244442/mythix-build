@@ -192,12 +192,13 @@ install-neutron: _dirs
 	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(NEUTRON_LIBDIR)/profiles/ (%s profiles)\n" \
 	        "$$(find "$(DESTDIR)$(NEUTRON_LIBDIR)/profiles" -mindepth 1 -maxdepth 1 -type d | wc -l)"; \
 	fi
-	@for d in lib phases; do \
+	@for d in lib phases neutron_lib; do \
 	    if [ -d "$(NEUTRON)/$$d" ]; then \
 	        rm -rf "$(DESTDIR)$(NEUTRON_LIBDIR)/$$d"; \
 	        cp -a "$(NEUTRON)/$$d" "$(DESTDIR)$(NEUTRON_LIBDIR)/$$d"; \
+	        find "$(DESTDIR)$(NEUTRON_LIBDIR)/$$d" -name __pycache__ -prune -exec rm -rf {} +; \
 	        printf "  \033[1;32m+\033[0m $(DESTDIR)$(NEUTRON_LIBDIR)/$$d/ (%s modules)\n" \
-	            "$$(find "$(DESTDIR)$(NEUTRON_LIBDIR)/$$d" -type f -name '*.sh' | wc -l)"; \
+	            "$$(find "$(DESTDIR)$(NEUTRON_LIBDIR)/$$d" -name '*.sh' -o -name '*.py' | wc -l)"; \
 	    fi; \
 	done
 	@src="$(NEUTRON)/$(NEUTRON_CFG)"; dest="$(DESTDIR)$(CFGDIR)/$(NEUTRON_CFG)"; \
