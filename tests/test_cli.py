@@ -34,7 +34,7 @@ def test_list_keys_format() -> None:
     keys = result.output.strip().splitlines()
     assert "wine-builder" in keys
     assert "neutron-builder" in keys
-    assert "wine_toolz" in keys
+    assert "neutron-installin keys
 
 
 def test_launch_unknown_tool(monkeypatch: pytest.MonkeyPatch) -> None:
