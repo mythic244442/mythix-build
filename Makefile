@@ -1,6 +1,6 @@
 # ╔═══════════════════════════════════════════════════════════════════════════╗
 # ║  mythix-build  •  Makefile  (subdirectory layout)                           ║
-# ║  Installs / uninstalls all builder and winetoolz scripts                   ║
+# ║  Installs / uninstalls all builder and installer scripts                   ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 #
 # Usage:
@@ -9,7 +9,6 @@
 #   make install-proton   — install only mythix-proton_builder
 #   make install-wine     — install only mythix-wine_builder
 #   make install-hybrid   — install only mythix-wine-proton_hybrid_builder
-#   make install-toolz    — install only mythix-winetoolz
 #   make uninstall        — remove everything installed by this Makefile
 #   make help             — show this reference
 #
@@ -33,7 +32,6 @@ PROTON_B_LIBDIR := $(PREFIX)/lib/mythix-proton_builder
 WINE_LIBDIR     := $(PREFIX)/lib/mythix-wine_builder
 HYBRID_LIBDIR   := $(PREFIX)/lib/mythix-wine-proton_hybrid_builder
 NHYBRID_LIBDIR  := $(PREFIX)/lib/mythix-wine-neutron_hybrid_builder
-TOOLZ_LIBDIR    := $(PREFIX)/lib/mythix-winetoolz
 NEUTRON_I_LIBDIR := $(PREFIX)/lib/mythix-neutron-install
 PROTON_I_LIBDIR  := $(PREFIX)/lib/mythix-proton-install
 
@@ -55,7 +53,6 @@ PROTON_B  := $(ROOT)mythix-proton_builder
 WINE      := $(ROOT)mythix-wine_builder
 HYBRID    := $(ROOT)mythix-wine-proton_hybrid_builder
 NHYBRID   := $(ROOT)mythix-wine-neutron_hybrid_builder
-TOOLZ     := $(ROOT)mythix-winetoolz
 NEUTRON_I := $(ROOT)mythix-neutron-install
 PROTON_I  := $(ROOT)mythix-proton-install
 
@@ -332,7 +329,6 @@ uninstall:
 	          "$(DESTDIR)$(WINE_LIBDIR)" \
 	          "$(DESTDIR)$(HYBRID_LIBDIR)" \
 	          "$(DESTDIR)$(NHYBRID_LIBDIR)" \
-	          "$(DESTDIR)$(TOOLZ_LIBDIR)" \
 	          "$(DESTDIR)$(PROTON_I_LIBDIR)"; do \
 	    [ -d "$$d" ] && { rm -rf "$$d"; printf "  \033[1;31m-\033[0m $$d/\n"; } || true; \
 	done
