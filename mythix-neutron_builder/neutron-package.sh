@@ -489,6 +489,62 @@ else
     msg2 "vkd3d-proton.conf not found alongside packager — skipping"
 fi
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  Shared Wine Mono / Gecko
+#
+#  Unpacked once under files/share/wine/{mono,gecko} (Proton's layout), every
+#  prefix loads them from there instead of carrying its own 314 MB of Mono.
+#  The versions are the ones this Wine's appwiz.cpl asks for. Tarballs are
+#  cached; NEUTRON_SHARED_ADDONS=0 skips this and prefixes install their own.
+# ══════════════════════════════════════════════════════════════════════════════
+sep "Installing shared Wine Mono / Gecko"
+_appwiz="${_files_dir}/lib/wine/x86_64-windows/appwiz.cpl"
+_addon_cache="${XDG_CACHE_HOME:-$HOME/.cache}/mythix-build/wine-addons"
+_addon_url="https://dl.winehq.org/wine"
+
+# _addon <kind> <tarball> <dir it unpacks to>
+_addon() {
+    local _dst="${_files_dir}/share/wine/$1"
+    if [ -d "${_dst}/$3" ]; then
+        ok "$3 already in place"
+        return 0
+    fi
+    mkdir -p "$_addon_cache" "$_dst"
+    if [ ! -f "${_addon_cache}/$2" ]; then
+        local _ver="${3#wine-$1-}"
+        _ver="${_ver%%-x86*}"
+        if ! curl -#fL -o "${_addon_cache}/$2.part" "${_addon_url}/wine-$1/${_ver}/$2"; then
+            rm -f "${_addon_cache}/$2.part"
+            warn "could not fetch $2 — skipped; Wine falls back to per-prefix installs"
+            return 0
+        fi
+        mv "${_addon_cache}/$2.part" "${_addon_cache}/$2"
+    fi
+    if tar -xJf "${_addon_cache}/$2" -C "$_dst" && [ -d "${_dst}/$3" ]; then
+        ok "$3 shared ($(du -sh "${_dst}/$3" | cut -f1))"
+    else
+        rm -rf "${_dst:?}/$3"
+        warn "$2 did not unpack to $3 — skipped; Wine falls back to per-prefix installs"
+    fi
+}
+
+if [ "${NEUTRON_SHARED_ADDONS:-1}" = "0" ]; then
+    msg2 "NEUTRON_SHARED_ADDONS=0 — skipping"
+elif [ ! -f "$_appwiz" ]; then
+    warn "appwiz.cpl not found — cannot tell which Mono/Gecko this Wine wants"
+else
+    _mono_ver="$(strings -el "$_appwiz" | sed -n 's/^wine-mono-\(.*\)-x86\.msi$/\1/p' | head -1)"
+    _gecko_ver="$(strings -el "$_appwiz" | sed -n 's/^wine-gecko-\(.*\)-x86_64\.msi$/\1/p' | head -1)"
+    if [ -n "$_mono_ver" ]; then
+        _addon mono "wine-mono-${_mono_ver}-x86.tar.xz" "wine-mono-${_mono_ver}"
+    fi
+    if [ -n "$_gecko_ver" ]; then
+        for _arch in x86 x86_64; do
+            _addon gecko "wine-gecko-${_gecko_ver}-${_arch}.tar.xz" "wine-gecko-${_gecko_ver}-${_arch}"
+        done
+    fi
+fi
+
 sep "Installing neutron launcher"
 _launcher_src="${_script_dir}/neutron.py"
 if [ ! -f "$_launcher_src" ]; then

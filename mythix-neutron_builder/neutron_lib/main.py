@@ -35,6 +35,10 @@ def main(entry, fallback_prefix_version):
     verb = sys.argv[1]
     extra = sys.argv[2:]
 
+    # slimprefix also takes the compatdata dir as an argument
+    if verb == "slimprefix" and extra:
+        os.environ["STEAM_COMPAT_DATA_PATH"] = os.path.abspath(extra[0])
+
     compatdata = CompatData()
 
     # createprefix drives a base Proton with its own minimal env, then
@@ -62,6 +66,15 @@ def main(entry, fallback_prefix_version):
         session.init_session(make_prefix=False)
         neutron.make_default_prefix(session.env, force="--force" in extra)
         log(f"default_pfx at {neutron.default_pfx_dir}")
+        sys.exit(0)
+
+    # slimprefix swaps a prefix's private Wine Mono for the shared one
+    if verb == "slimprefix":
+        if not os.path.isdir(compatdata.prefix):
+            die(f"no prefix at {compatdata.prefix}")
+        session = Session(neutron, compatdata)
+        session.init_session(make_prefix=False)
+        session.components["addons"].slim()
         sys.exit(0)
 
     session = Session(neutron, compatdata)

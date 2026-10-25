@@ -890,6 +890,7 @@ to do. `neutron` handles all standard Proton verbs:
 | `createprefix` | Create a prefix using a base Proton, then overlay Neutron DLLs (`--proton PATH`) |
 | `destroyprefix` | Remove exactly the files Neutron installed (tracked-files manifest) |
 | `makedefaultpfx` | (Re)create the prefix template (`--force` to regenerate) |
+| `slimprefix` | Swap an older prefix's private Wine Mono (~313 MB) for the shared one (`neutron slimprefix [compatdata]`, game closed) |
 | `diag` | Print resolved configuration without launching anything (`--full-env` for all vars) |
 
 **Sync primitive auto-detection.** The launcher inspects the `wineserver` binary for
@@ -932,6 +933,14 @@ fresh prefix (no `system.reg` present), `neutron` automatically:
 
 This means DXVK and VKD3D-Proton are active from the very first game launch with no
 manual setup step.
+
+**Shared Wine Mono and Gecko.** The packager unpacks the Mono and Gecko versions the
+build's Wine asks for (read from its `appwiz.cpl`) into `files/share/wine/{mono,gecko}`,
+the layout Proton uses, caching the tarballs under `~/.cache/mythix-build/wine-addons`.
+Every prefix loads them from there, so the template and each new prefix no longer
+carry their own 313 MB of Mono, and HTML views (mshtml) work. Prefixes made before
+this keep their private copy until `slimprefix` (diag points them out);
+`NEUTRON_SHARED_ADDONS=0` at package time skips the step.
 
 **WINEDLLOVERRIDES — forcing native over builtin.** The launcher sets:
 

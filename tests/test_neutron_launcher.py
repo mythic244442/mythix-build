@@ -295,6 +295,132 @@ def test_template_builtins_become_links(session_for):
     assert (Path(n.default_pfx_dir) / n._BUILTINS_LINKED).read_text() == "2\n"
 
 
+# ── shared Wine Mono / Gecko ────────────────────────────────────────────────
+# Unpacked once under files/share/wine like Proton; the versions are the ones
+# the build's appwiz.cpl names, and a prefix's private Mono can be dropped.
+
+def ship_appwiz(neutron):
+    names = "\0".join(("wine-gecko-2.47.4-x86_64.msi", "gecko",
+                       "wine-mono-10.4.1-x86.msi", "mono"))
+    (Path(neutron.pe_system32) / "appwiz.cpl").write_bytes(
+        b"MZ\0\0" + names.encode("utf-16-le"))
+
+
+def ship_addons(neutron, *names):
+    for name in names:
+        kind = name.split("-")[1]
+        (Path(neutron.share_dir) / "wine" / kind / name).mkdir(parents=True)
+
+
+def test_addon_versions_come_from_appwiz(session_for):
+    n = session_for(BRIDGE).neutron
+    assert n.addon_version("mono") is None and n.shared_addon_dirs("mono") == []
+    ship_appwiz(n)
+    n = type(n)(n.dir)                                # versions are cached
+    assert (n.addon_version("mono"), n.addon_version("gecko")) == ("10.4.1", "2.47.4")
+    ship_addons(n, "wine-mono-9.3.1", "wine-gecko-2.47.4-x86_64")
+    assert n.shared_addon_dirs("mono") == []          # not the version Wine wants
+    assert n.shared_addon_dirs("gecko") == []         # needs both arches
+    ship_addons(n, "wine-mono-10.4.1", "wine-gecko-2.47.4-x86")
+    assert [Path(d).name for d in n.shared_addon_dirs("mono")] == ["wine-mono-10.4.1"]
+    assert len(n.shared_addon_dirs("gecko")) == 2
+
+
+def test_template_with_private_mono_is_regenerated(session_for):
+    from neutron_lib import version
+    n = session_for(BRIDGE).neutron
+    ship_appwiz(n)
+    pfx = Path(n.default_pfx_dir)
+    (pfx / "drive_c" / "windows" / "mono" / "mono-2.0").mkdir(parents=True)
+    (pfx / "dosdevices").mkdir()
+    for reg in ("system.reg", "user.reg", "userdef.reg"):
+        (pfx / reg).write_text("")
+    (pfx / n._DEFAULT_PFX_STAMP).write_text(version.CURRENT_PREFIX_VERSION + "\n")
+    os.utime(pfx / "system.reg", (2**31, 2**31))      # newer than the build
+    assert not n.default_prefix_stale()
+    ship_addons(n, "wine-mono-10.4.1")
+    assert n.default_prefix_stale()
+
+
+FAKE_WINE = """#!/bin/sh
+# uninstaller --list / msiexec /x / wineboot -u, as far as slimprefix needs
+win="$WINEPREFIX/drive_c/windows"
+case "$1 $2" in
+"uninstaller --list")
+    echo "{C6477445}|||Wine Mono Runtime" >&2
+    echo "{0591009C}|||Wine Mono Windows Support" >&2 ;;
+"msiexec /x") rm -rf "$win/mono" "$win/Installer/runtime.msi" ;;
+"-u ") echo support > "$win/Installer/support.msi" ;;
+esac
+"""
+
+
+def private_mono_prefix(pkg, cd, owner):
+    for name, body in (("wine", FAKE_WINE), ("wineboot", FAKE_WINE.replace(
+            'case "$1 $2"', 'case "$1 "')), ("wineserver", "#!/bin/sh\n")):
+        (pkg / "files" / "bin" / name).write_text(body)
+        (pkg / "files" / "bin" / name).chmod(0o755)
+    win = cd / "pfx" / "drive_c" / "windows"
+    (win / "mono" / "mono-2.0" / "bin").mkdir(parents=True)
+    (win / "mono" / "mono-2.0" / "bin" / "libmono-2.0-x86_64.dll").write_bytes(b"MZ")
+    (win / "mono" / "mono-2.0" / "mscorlib.dll").write_bytes(b"x" * 65536)
+    (win / "Installer").mkdir()
+    (win / "Installer" / "runtime.msi").write_bytes(b"x" * 65536)
+    (cd / "version").write_text(owner + "\n")
+    (cd / "tracked_files").write_text("system.reg\ndrive_c/windows/mono/\n"
+                                      "drive_c/windows/mono/mono-2.0/mscorlib.dll\n"
+                                      "drive_c/windows/Installer/\n")
+    return win
+
+
+def test_slimprefix_swaps_private_mono_for_shared(tmp_path):
+    pkg = install_tool(tmp_path, fallback="Mythix-Neutron-11.19-9")
+    cd = tmp_path / "game"
+    win = private_mono_prefix(pkg, cd, "Mythix-Neutron-11.19-9")
+
+    r = run_tool(pkg, tmp_path, "slimprefix", str(cd))
+    assert r.returncode != 0 and "no shared Wine Mono" in r.stderr
+    assert (win / "mono").is_dir()
+
+    ship_appwiz(SimpleNamespace(pe_system32=pkg / "files/lib/wine/x86_64-windows"))
+    ship_addons(SimpleNamespace(share_dir=pkg / "files/share"), "wine-mono-10.4.1")
+    r = run_tool(pkg, tmp_path, "diag")
+    assert "10.4.1 shared from files/share/wine/mono" in r.stdout
+    r = run_tool(pkg, tmp_path, "slimprefix", str(cd))
+    assert r.returncode == 0, r.stderr
+    assert not (win / "mono").exists()
+    assert sorted(os.listdir(win / "Installer")) == ["support.msi"]
+    assert (cd / "tracked_files").read_text() == "system.reg\ndrive_c/windows/Installer/\n"
+    assert "uses the shared Mono" in run_tool(pkg, tmp_path, "slimprefix", str(cd)).stderr
+
+
+def test_slimprefix_clears_a_half_replaced_runtime(tmp_path):
+    # wineboot already moved the runtime out; only strays and a registry
+    # entry whose msi is gone remain, so the uninstall removes nothing
+    pkg = install_tool(tmp_path, fallback="Mythix-Neutron-11.19-9")
+    ship_appwiz(SimpleNamespace(pe_system32=pkg / "files/lib/wine/x86_64-windows"))
+    ship_addons(SimpleNamespace(share_dir=pkg / "files/share"), "wine-mono-10.4.1")
+    cd = tmp_path / "game"
+    win = private_mono_prefix(pkg, cd, "Mythix-Neutron-11.19-9")
+    wine = pkg / "files" / "bin" / "wine"
+    wine.write_text(wine.read_text().replace('rm -rf "$win/mono" ', ""))
+    shutil.rmtree(win / "mono" / "mono-2.0" / "bin")
+    r = run_tool(pkg, tmp_path, "slimprefix", str(cd))
+    assert r.returncode == 0, r.stderr
+    assert not (win / "mono").exists()
+
+
+def test_slimprefix_leaves_other_builds_prefixes_alone(tmp_path):
+    pkg = install_tool(tmp_path, fallback="Mythix-Neutron-11.19-9")
+    ship_appwiz(SimpleNamespace(pe_system32=pkg / "files/lib/wine/x86_64-windows"))
+    ship_addons(SimpleNamespace(share_dir=pkg / "files/share"), "wine-mono-10.4.1")
+    cd = tmp_path / "game"
+    win = private_mono_prefix(pkg, cd, "GE-Proton10-23")
+    r = run_tool(pkg, tmp_path, "slimprefix", str(cd))
+    assert r.returncode != 0 and "belongs to GE-Proton10-23" in r.stderr
+    assert (win / "mono" / "mono-2.0" / "mscorlib.dll").exists()
+
+
 # ── translation-layer manifest ──────────────────────────────────────────────
 # One manifest drives install, overrides, config_info and diag.
 
@@ -445,7 +571,7 @@ def test_packaged_entry_runs_diag(tmp_path):
     r = run_tool(pkg, tmp_path, "diag")
     assert r.returncode == 0, r.stderr
     for title in ("translation layers (bundled)", "steam", "vr", "nvidia",
-                  "sony controllers"):
+                  "sony controllers", "wine mono / gecko"):
         assert f"== {title} ==" in r.stdout
     assert "Mythix-Neutron-11.19-9 (from fallback)" in r.stdout
     assert not list(pkg.rglob("__pycache__"))

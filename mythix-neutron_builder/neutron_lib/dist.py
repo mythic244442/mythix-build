@@ -3,6 +3,7 @@
 import collections
 import filecmp
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -38,6 +39,11 @@ TRANSLATION_LAYERS = (
 # Where each arch's DLLs land in a prefix (WoW64 layout)
 PREFIX_ARCH_DIRS = (("x64", "drive_c/windows/system32"),
                     ("x86", "drive_c/windows/syswow64"))
+
+
+def _wide(text):
+    """Regex bytes matching text as Wine stores strings: UTF-16LE."""
+    return re.escape(text.encode("utf-16-le"))
 
 
 # ── The Neutron distribution (Wine build + helpers) ─────────────
@@ -169,6 +175,40 @@ class Neutron:
         return os.path.isfile(os.path.join(self.pe_system32, "vrclient_x64.dll")) \
             and os.path.isfile(os.path.join(self.unix_dir, "vrclient.so"))
 
+    # — Wine Mono / Gecko shared by every prefix —
+    # Unpacked under files/share/wine/{mono,gecko} as in Proton: mscoree and
+    # mshtml load them from there, and wineboot then installs only Mono's
+    # small support msi instead of the 232 MB runtime plus its 82 MB msi.
+    # the msi names appwiz.cpl looks for, as UTF-16 strings in the DLL
+    _ADDON_NAME = {
+        "mono": re.compile(_wide("wine-mono-") + rb"((?:[0-9.]\x00)+)" + _wide("-x86")),
+        "gecko": re.compile(_wide("wine-gecko-") + rb"((?:[0-9.]\x00)+)" + _wide("-")),
+    }
+
+    def addon_version(self, kind):
+        """The Mono/Gecko version this Wine asks for (from appwiz.cpl), or None."""
+        cache = self.__dict__.setdefault("_addon_versions", {})
+        if kind not in cache:
+            try:
+                with open(os.path.join(self.pe_system32, "appwiz.cpl"), "rb") as f:
+                    m = self._ADDON_NAME[kind].search(f.read())
+            except OSError:
+                m = None
+            cache[kind] = m.group(1).decode("utf-16-le") if m else None
+        return cache[kind]
+
+    def shared_addon_dirs(self, kind):
+        """The shared dirs Wine will load for "mono" or "gecko"; [] when this
+        build doesn't ship the version its Wine wants."""
+        ver = self.addon_version(kind)
+        if not ver:
+            return []
+        base = os.path.join(self.share_dir, "wine", kind)
+        names = ([f"wine-mono-{ver}"] if kind == "mono" else
+                 [f"wine-gecko-{ver}-x86_64", f"wine-gecko-{ver}-x86"])
+        dirs = [os.path.join(base, name) for name in names]
+        return dirs if all(os.path.isdir(d) for d in dirs) else []
+
     def missing_default_prefix(self):
         """True when no structurally complete template exists."""
         # Accept a shipped legacy template without the new completion stamp;
@@ -182,6 +222,10 @@ class Neutron:
         # A legacy shipped template is usable but should be regenerated once so
         # future launches have positive proof that Neutron created it.
         if not self._default_prefix_valid():
+            return True
+        # a template from before shared Mono carries its own private copy
+        if self.shared_addon_dirs("mono") and os.path.isdir(
+                os.path.join(self.default_pfx_dir, "drive_c", "windows", "mono")):
             return True
         reg_mtime = mtime_str(self.default_pfx_dir, "system.reg")
         build_sigs = (mtime_str(self.wine_inf),
@@ -238,7 +282,7 @@ class Neutron:
                 return
             if force or stale:
                 log("regenerating default prefix template"
-                    + ("" if force else " (wine build changed)") + "...")
+                    + ("" if force else " (out of date)") + "...")
 
             parent = os.path.dirname(self.default_pfx_dir)
             makedirs(parent)

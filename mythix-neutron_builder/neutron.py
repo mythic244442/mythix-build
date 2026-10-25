@@ -13,7 +13,7 @@
 #
 # plus helper verbs:
 #
-#     createprefix | destroyprefix | makedefaultpfx | stop | diag
+#     createprefix | destroyprefix | makedefaultpfx | slimprefix | stop | diag
 #
 # Incorporates engine improvements adapted (re-implemented, not copied) from
 # Valve Proton 11 — see mythix-build NOTICE for attribution:
@@ -32,13 +32,15 @@
 #   in system32/syswow64, plus its vrclient when this build has none, are
 #   quarantined to <compatdata>/foreign-quarantine every launch
 #   - game / Steam-library DOS drives (s: / t:)
+#   - Wine Mono / Gecko unpacked once under files/share/wine and shared by
+#     every prefix; `slimprefix` moves an older prefix off its private Mono
 #   - WoW64 mode toggle, user_settings.py overrides, an extensible
 #     compat_config framework, and NEUTRON_LOG logging + health warnings
 #
-# Optional integrations (translation layers, Steam, VR, NVIDIA, Sony pads)
-# are Component classes listed in COMPONENTS: each says what it installs,
-# which env and DLL overrides it adds, what it sweeps, what it redoes every
-# launch and what diag shows; the core only calls the hooks.
+# Optional integrations (translation layers, Steam, VR, NVIDIA, Sony pads,
+# Wine Mono/Gecko) are Component classes listed in COMPONENTS: each says what
+# it installs, which env and DLL overrides it adds, what it sweeps, what it
+# redoes every launch and what diag shows; the core only calls the hooks.
 #
 # This script is only the entry point; the launcher is the neutron_lib/
 # package next to it (see neutron_lib/__init__.py for the map).

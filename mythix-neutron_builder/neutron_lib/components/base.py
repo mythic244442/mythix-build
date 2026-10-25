@@ -5,9 +5,9 @@
 
 # ── Components ───────────────────────────────────────────────────────────────
 # Everything optional the launcher wires into a launch (the translation
-# layers, Steam, VR, NVIDIA, Sony pads) is one class with the same hooks, so a
-# new integration is a class added to COMPONENTS, not edits threaded through
-# the overlay, the overrides, the environment and diag. Session builds one of
+# layers, Steam, VR, NVIDIA, Sony pads, Wine Mono/Gecko) is one class with
+# the same hooks, so a new integration is a class added to COMPONENTS, not
+# edits threaded through the overlay, the overrides, the environment and diag. Session builds one of
 # each per launch; the core calls the hooks in COMPONENTS order.
 class Component:
     """The hooks; each defaults to doing nothing."""
