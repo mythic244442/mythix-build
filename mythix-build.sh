@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ╔═════════════════════════════════════════════════════════════════════════════╗
 # ║                    mythix-build  •  main launcher  v1.0.0                   ║
-# ║           Wine  •  Neutron  •  Proton  •  Hybrid  •  Toolz                  ║
+# ║             Wine  •  Neutron  •  Proton  •  Hybrid                    ║
 # ╚═════════════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
@@ -26,9 +26,7 @@ _find_tool() {
         proton-install)     _bin="${SCRIPT_DIR}/mythix-proton-install/proton-install.sh" ;;
         wine-proton_hybrid)  _bin="${SCRIPT_DIR}/mythix-wine-proton_hybrid_builder/wine-proton_hybrid-v1.0.0.sh" ;;
         wine-neutron_hybrid) _bin="${SCRIPT_DIR}/mythix-wine-neutron_hybrid_builder/wine-neutron_hybrid-v1.0.0.sh" ;;
-        wine_toolz)         _bin="${SCRIPT_DIR}/mythix-winetoolz/wine_toolz.sh" ;;
-        wine_install_mgr)   _bin="${SCRIPT_DIR}/mythix-winetoolz/modules/shared_lib/wine_install_manager.sh" ;;
-    esac
+           esac 
     [ -x "$_bin" ] && { echo "$_bin"; return; }
 
     # 3. Installed lib layout: make install puts modules under prefix/lib/
@@ -38,9 +36,7 @@ _find_tool() {
         neutron-install)  _bin="${_lib}/mythix-neutron-install/neutron-install.sh" ;;
         proton-builder)   _bin="${_lib}/mythix-proton_builder/proton-builder.sh" ;;
         proton-install)   _bin="${_lib}/mythix-proton-install/proton-install.sh" ;;
-        wine_toolz)       _bin="${_lib}/mythix-winetoolz/wine_toolz.sh" ;;
-        wine_install_mgr) _bin="${_lib}/mythix-winetoolz/modules/shared_lib/wine_install_manager.sh" ;;
-    esac
+           esac 
     [ -x "$_bin" ] && { echo "$_bin"; return; }
 
     echo ""
@@ -108,23 +104,19 @@ TOOL_KEY=(
     [3]="proton-builder"
     [4]="wine-proton_hybrid"
     [5]="wine-neutron_hybrid"
-    [6]="wine_install_mgr"
-    [7]="neutron-install"
-    [8]="proton-install"
-    [9]="wine_toolz"
-)
+    [6]="neutron-install"
+    [7]="proton-install"
+    
 TOOL_DESC=(
     [1]="🛠  wine-builder          — build Wine from source (mainline, staging, TKG, Valve…)"
     [2]="🎮  neutron-builder       — build Neutron (WineHQ, Valve, Kron4ek, staging…)"
     [3]="🔧  proton-builder        — build Proton from source (GE, TKG build scripts…)"
     [4]="⇌   wine-proton_hybrid    — merge any Wine build over a Proton base"
     [5]="⇌   wine-neutron_hybrid   — merge any Wine build over a Neutron base"
-    [6]="📦  wine_install_mgr      — install, switch, and manage custom Wine builds"
-    [7]="🚀  neutron-install       — deploy Neutron packages to Steam"
-    [8]="🚀  proton-install        — download & deploy GE-Proton / pre-built Proton to Steam"
-    [9]="⚙   wine_toolz            — GUI Wine toolkit (DXVK, prefixes, runtimes…)"
+    [6]="🚀  neutron-install       — deploy Neutron packages to Steam"
+    [7]="🚀  proton-install        — download & deploy GE-Proton / pre-built Proton to Steam"
 )
-TOOL_KEYS=( wine-builder neutron-builder proton-builder wine-proton_hybrid wine-neutron_hybrid wine_install_mgr neutron-install proton-install wine_toolz )
+TOOL_KEYS=( wine-builder neutron-builder proton-builder wine-proton_hybrid wine-neutron_hybrid neutron-install proton-install )
 
 # ── Launch + menu loop ────────────────────────────────────────────────────────
 _launch() {
@@ -189,14 +181,14 @@ while true; do
     else
         # Fallback: numbered menu
         printf "  ${C_B}Select a tool:${C_R}\n\n"
-        for idx in 1 2 3 4 5 6 7 8 9; do
+        for idx in 1 2 3 4 5 6 7; do
             printf "  ${C_CYN}%d)${C_R} %s\n" "$idx" "${TOOL_DESC[$idx]}"
         done
         printf "  ${C_CYN}q)${C_R}  Exit\n"
-        printf "\n  ${C_B}Choice [1-9, q]:${C_R} "
+        printf "\n  ${C_B}Choice [ 1-7, q]:${C_R} "
         read -r _choice
         case "$_choice" in
-            1|2|3|4|5|6|7|8|9) key="${TOOL_KEY[$_choice]}" ;;
+            1|2|3|4|5|6|5|6|7) key="${TOOL_KEY[$_choice]}" ;;
             q|Q|"")  printf "\n  ${C_DIM}Goodbye :3${C_R}\n\n"; exit 0 ;;
             *) printf "\n  ${C_MAG}Invalid choice.${C_R}\n\n"; continue ;;
         esac
