@@ -99,16 +99,7 @@ TOOLS: Final[tuple[Tool, ...]] = (
         group="hybrid",
         source_relpath="mythix-wine-neutron_hybrid_builder/wine-neutron_hybrid-v1.0.0.sh",
     ),
-    Tool(
-        key="wine_install_mgr",
-        icon="📦",
-        title="wine_install_mgr",
-        blurb="Install, switch, and manage custom Wine builds",
-        group="install",
-        source_relpath="mythix-winetoolz/modules/shared_lib/wine_install_manager.sh",
-        installed_lib_subdir="mythix-winetoolz/modules/shared_lib",
-    ),
-    Tool(
+       Tool(
         key="neutron-install",
         icon="🚀",
         title="neutron-install",
@@ -126,16 +117,7 @@ TOOLS: Final[tuple[Tool, ...]] = (
         source_relpath="mythix-proton-install/proton-install.sh",
         installed_lib_subdir="mythix-proton-install",
     ),
-    Tool(
-        key="wine_toolz",
-        icon="🧰",
-        title="wine_toolz",
-        blurb="GUI Wine toolkit — DXVK, prefixes, runtimes",
-        group="gui",
-        source_relpath="mythix-winetoolz/wine_toolz.sh",
-        installed_lib_subdir="mythix-winetoolz",
-    ),
-)
+   )
 
 TOOLS_BY_KEY: Final[dict[str, Tool]] = {t.key: t for t in TOOLS}
 
