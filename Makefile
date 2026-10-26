@@ -104,39 +104,15 @@ NEUTRON_I_BIN := neutron-install.sh
 # proton-install: single script
 PROTON_I_BIN := proton-install.sh
 
-# winetoolz: launcher + all modules
-TOOLZ_BIN     := wine_toolz.sh
-TOOLZ_MODULES := \
-    modules/winetoolz-lib.sh \
-    modules/shared_lib/about.sh \
-    modules/shared_lib/app_launcher.sh \
-    modules/shared_lib/directx_installer-local.sh \
-    modules/shared_lib/dll_installer.sh \
-    modules/shared_lib/dll_override_manager.sh \
-    modules/shared_lib/dxvk_setup-gui.sh \
-    modules/shared_lib/env_flags.sh \
-    modules/shared_lib/install_components-x86_64.sh \
-    modules/shared_lib/install_nvapi.sh \
-    modules/shared_lib/log_viewer.sh \
-    modules/shared_lib/prefix_diagnostics.sh \
-    modules/shared_lib/prefix_manager.sh \
-    modules/shared_lib/runtime_manager.sh \
-    modules/shared_lib/runtimes_installer.sh \
-    modules/shared_lib/setup_vkd3d_proton-gui.sh \
-    modules/shared_lib/vcruntime_installer-gui.sh \
-    modules/shared_lib/wine_tools.sh \
-    modules/shared_lib/wine_install_manager.sh \
-    modules/shared_lib/winetoolz-prefix-maker.sh
-
 # ── Phony targets ─────────────────────────────────────────────────────────────
-.PHONY: all install install-neutron install-proton install-wine install-hybrid install-neutron-hybrid install-toolz \
+.PHONY: all install install-neutron install-proton install-wine install-hybrid install-neutron-hybrid \
         install-launcher install-neutron-install install-proton-install uninstall help _dirs _setup-path \
         py-dev py-test py-tui py-doctor py-clean
 
 all: help
 
 # ── install ───────────────────────────────────────────────────────────────────
-install: _dirs install-launcher install-neutron install-proton install-wine install-hybrid install-neutron-hybrid install-toolz install-neutron-install install-proton-install _setup-path
+install: _dirs install-launcher install-neutron install-proton install-wine install-hybrid install-neutron-hybrid install-neutron-install install-proton-install _setup-path
 	@printf "\n\033[1;32m ✓  mythix-build installed to %s\033[0m\n\n" "$(DESTDIR)$(PREFIX)"
 	@printf "  mythix-build        → $(DESTDIR)$(BINDIR)/mythix-build\n"
 	@printf "  neutron-builder    → $(DESTDIR)$(BINDIR)/neutron-builder\n"
@@ -144,7 +120,6 @@ install: _dirs install-launcher install-neutron install-proton install-wine inst
 	@printf "  proton-builder     → $(DESTDIR)$(BINDIR)/proton-builder\n"
 	@printf "  proton-install     → $(DESTDIR)$(BINDIR)/proton-install\n"
 	@printf "  wine-builder       → $(DESTDIR)$(BINDIR)/wine-builder\n"
-	@printf "  wine_toolz         → $(DESTDIR)$(BINDIR)/wine_toolz\n"
 	@printf "  wine-proton_hybrid  → $(DESTDIR)$(BINDIR)/wine-proton_hybrid\n"
 	@printf "  wine-neutron_hybrid → $(DESTDIR)$(BINDIR)/wine-neutron_hybrid\n"
 	@printf "  config             → $(DESTDIR)$(CFGDIR)/\n\n"
@@ -162,7 +137,6 @@ _dirs:
 	install -d "$(DESTDIR)$(HYBRID_LIBDIR)/buildz"
 	install -d "$(DESTDIR)$(NHYBRID_LIBDIR)"
 	install -d "$(DESTDIR)$(NHYBRID_LIBDIR)/buildz"
-	install -d "$(DESTDIR)$(TOOLZ_LIBDIR)/modules/shared_lib"
 	install -d "$(DESTDIR)$(CFGDIR)"
 
 # ── mythix-neutron_builder ──────────────────────────────────────────────────────
@@ -285,23 +259,6 @@ install-neutron-hybrid: _dirs
 	    printf "  \033[2mskip (not found): $(NHYBRID)/$(NHYBRID_BIN)\033[0m\n"; \
 	fi
 
-# ── mythix-winetoolz ───────────────────────────────────────────────────────────
-install-toolz: _dirs
-	@printf "\033[1;36m── mythix-winetoolz\033[0m\n"
-	install -m 755 "$(TOOLZ)/$(TOOLZ_BIN)" \
-	    "$(DESTDIR)$(BINDIR)/wine_toolz"
-	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/wine_toolz\n"
-	@for f in $(TOOLZ_MODULES); do \
-	    src="$(TOOLZ)/$$f"; \
-	    [ -f "$$src" ] || { printf "  \033[2mskip (not found): $$f\033[0m\n"; continue; }; \
-	    install -m 755 "$$src" "$(DESTDIR)$(TOOLZ_LIBDIR)/$$f"; \
-	    printf "  \033[1;32m+\033[0m $(DESTDIR)$(TOOLZ_LIBDIR)/$$f\n"; \
-	done
-	@printf '#!/usr/bin/env bash\n_d="$$(cd "$$(dirname "$$(readlink -f "$${BASH_SOURCE[0]}")")" && pwd)"\nexec bash "$${_d}/../lib/mythix-winetoolz/modules/shared_lib/wine_install_manager.sh" "$$@"\n' \
-	    > "$(DESTDIR)$(BINDIR)/wine_install_mgr"
-	@chmod 755 "$(DESTDIR)$(BINDIR)/wine_install_mgr"
-	@printf "  \033[1;32m+\033[0m $(DESTDIR)$(BINDIR)/wine_install_mgr\n"
-
 # ── .bashrc PATH setup (skipped during staged/packaged installs) ─────────────
 _setup-path:
 	@if [ -n "$(DESTDIR)" ]; then exit 0; fi; \
@@ -319,7 +276,7 @@ _setup-path:
 # ── uninstall ─────────────────────────────────────────────────────────────────
 uninstall:
 	@printf "\033[1;33mRemoving mythix-build from %s ...\033[0m\n" "$(DESTDIR)$(PREFIX)"
-	@for cmd in mythix-build neutron-builder neutron-install proton-builder proton-install wine-builder wine_toolz wine_install_mgr wine-proton_hybrid wine-neutron_hybrid; do \
+	@for cmd in mythix-build neutron-builder neutron-install proton-builder proton-install wine-builder wine_install_mgr wine-proton_hybrid wine-neutron_hybrid; do \
 	    f="$(DESTDIR)$(BINDIR)/$$cmd"; \
 	    [ -f "$$f" ] && { rm -f "$$f"; printf "  \033[1;31m-\033[0m $$f\n"; } || true; \
 	done
@@ -380,7 +337,7 @@ py-clean:
 
 # ── help ──────────────────────────────────────────────────────────────────────
 help:
-	@printf "\n\033[1mmythix-build — Wine / Neutron / Proton builders + winetoolz\033[0m\n\n"
+	@printf "\n\033[1mmythix-build — Wine / Neutron / Proton builders\033[0m\n\n"
 	@printf "\033[1mTargets:\033[0m\n"
 	@printf "  \033[1;36mmake install\033[0m           Install all sub-projects + add PATH to ~/.bashrc\n"
 	@printf "  \033[1;36mmake install-launcher\033[0m  mythix-build launcher only\n"
@@ -391,7 +348,6 @@ help:
 	@printf "  \033[1;36mmake install-wine\033[0m            mythix-wine_builder only\n"
 	@printf "  \033[1;36mmake install-hybrid\033[0m          mythix-wine-proton_hybrid_builder only\n"
 	@printf "  \033[1;36mmake install-neutron-hybrid\033[0m  mythix-wine-neutron_hybrid_builder only\n"
-	@printf "  \033[1;36mmake install-toolz\033[0m           mythix-winetoolz only\n"
 	@printf "  \033[1;36mmake uninstall\033[0m         Remove all installed files (asks about ~/.bashrc)\n"
 	@printf "  \033[1;36mmake help\033[0m              Show this message\n"
 	@printf "\n\033[1mPython TUI frontend (optional):\033[0m\n"
@@ -406,7 +362,6 @@ help:
 	@printf "\n\033[1mInstall layout:\033[0m\n"
 	@printf "  $(PREFIX)/bin/\n"
 	@printf "      neutron-builder  neutron-install  proton-builder  proton-install\n"
-	@printf "      wine-builder  wine_toolz  wine-proton_hybrid  wine-neutron_hybrid\n"
 	@printf "  $(PREFIX)/lib/mythix-neutron_builder/\n"
 	@printf "      *.sh  ntsync.h  deps-neutron-tkg\n"
 	@printf "  $(PREFIX)/lib/mythix-neutron_builder/patches/\n"
@@ -419,7 +374,6 @@ help:
 	@printf "      *.sh  deps-tkg\n"
 	@printf "  $(PREFIX)/lib/mythix-wine_builder/patches/\n"
 	@printf "      ← drop .patch/.diff here to apply before Wine configure\n"
-	@printf "  $(PREFIX)/lib/mythix-winetoolz/modules/shared_lib/\n"
 	@printf "  $(HOME)/.config/mythix-build/    ← cfg files (never overwritten)\n"
 	@printf "\n\033[1mRuntime dirs (created by scripts on first run):\033[0m\n"
 	@printf "  <data-dir>/buildz/install/       ← finished Wine / Proton installs\n"
@@ -431,7 +385,6 @@ help:
 	@printf "  neutron-builder                  # build Neutron interactively\n"
 	@printf "  proton-builder                   # build Proton interactively\n"
 	@printf "  wine-builder                    # build Wine interactively\n"
-	@printf "  wine_toolz                      # open winetoolz\n"
 	@printf "  wine-proton_hybrid              # Proton hybrid installer\n"
 	@printf "  wine-neutron_hybrid             # Neutron hybrid installer\n\n"
 	@printf "\033[1m~/.bashrc management:\033[0m\n"

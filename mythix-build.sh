@@ -106,7 +106,7 @@ TOOL_KEY=(
     [5]="wine-neutron_hybrid"
     [6]="neutron-install"
     [7]="proton-install"
-    
+)
 TOOL_DESC=(
     [1]="🛠  wine-builder          — build Wine from source (mainline, staging, TKG, Valve…)"
     [2]="🎮  neutron-builder       — build Neutron (WineHQ, Valve, Kron4ek, staging…)"
