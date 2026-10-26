@@ -65,6 +65,7 @@ Pins for the **ge** pipeline:
 | `PIN_WINE_REPO` / `PIN_WINE_COMMIT` | GE's `wine` submodule pin |
 | `PIN_STAGING_REPO` / `PIN_STAGING_COMMIT` | GE's `wine-staging` submodule pin |
 | `PIN_FFMPEG_REPO` / `PIN_FFMPEG_COMMIT` | GE's `ffmpeg` submodule pin |
+| `PIN_STEAM_BRIDGE_COMMIT` | `PIN_GE_COMMIT` (GE commit the Steam bridge is built from) |
 
 Pins for the **legacy** pipeline:
 
@@ -75,6 +76,7 @@ Pins for the **legacy** pipeline:
 | `PIN_TKG_COMMIT` | Kron4ek/wine-tkg commit to extract the TkG layer from |
 | `PIN_STAGING_REF` | wine-staging tag or commit |
 | `PIN_GE_COMMIT` | proton-ge-custom commit (kept in its own `proton-ge-custom-pinned` checkout) |
+| `PIN_STEAM_BRIDGE_COMMIT` | GE commit the Steam bridge is built from (default `PIN_GE_COMMIT`; see below) |
 
 ## Pipelines
 
@@ -108,6 +110,9 @@ This is the 5-layer pipeline in `neutron-builder.sh`:
 - TkG diff extraction
 - staging `--all`
 - GE patches
+- with `PROFILE_STEAM_BRIDGE=ge`: the Steam client bridge (see below), from
+  the pinned GE checkout — built in-tree, so the packager never downloads
+  Proton bits for the package
 - the long list of post-patch fixups
 
 Its behaviour is unchanged; a profile only injects pins. Pin failures are fatal,
@@ -121,7 +126,8 @@ ntdll redirects Steam's own `steamclient64.dll` into `lsteamclient.dll`, so
 lsteamclient has to be built for *this exact Wine*. A copy taken from some other
 Proton crashes Steam games (the old Cyberpunk "ABI mismatch").
 
-With the bridge on, the pipeline:
+Both pipelines share one implementation (`mythix-steam-bridge.sh`). With the
+bridge on, the pipeline:
 
 1. Runs GE's helper section of `protonprep-valve-staging.sh` (GE's lsteamclient
    patches) on GE's `lsteamclient/` and `steam_helper/`.
@@ -129,6 +135,19 @@ With the bridge on, the pipeline:
 
 Wine's own build then makes `lsteamclient.dll/.so` and `steam.exe` for every
 arch. The packager never downloads Proton bits for such a build.
+
+For the **legacy** pipeline the sources come from the pinned
+`proton-ge-custom-pinned` checkout (Layer 4b, right after the GE patch layer);
+the patch pipeline uses its own GE work-dir checkout.
+
+GE's lsteamclient tracks Valve's newest Wine, so a GE commit's bridge only
+builds on the Wine it was written for. A profile on an older base sets
+`PIN_STEAM_BRIDGE_COMMIT` to the last GE commit whose lsteamclient matches it;
+the bridge is then built from its own checkout (`proton-ge-custom-bridge`)
+while the GE patch layer stays on `PIN_GE_COMMIT`. The source lock records it
+as `bridge_ge_commit`. mythix-10.17 pins GE-Proton10-34 this way: newer GE
+calls `ntdll_get_dos_file_name`/`ntdll_get_unix_file_name`, which only exist
+from Wine 11.0 on.
 
 The package's `build-info` gets `STEAM_BRIDGE=ge`. The `neutron` launcher then
 follows Proton's Steam model for launches of a real Steam app (`SteamGameId` is
@@ -162,6 +181,21 @@ Three layers handle a Sony pad:
 
 The Neutron 11.0 line (Valve's stock xinput) keeps Luna's original xinput
 change, with its Sony direct path, in the patch group `mythix-ds4-xinput`.
+
+## DualShock 4 / DualSense (mythix-10.17)
+
+The patch group `mythix-ds4-10` carries both layers for the proton_10.0 tree:
+
+- **winebus**: the `mythix-ds4` patch rebased onto this tree, plus hidraw on
+  by default (`DisableHidraw=0`, Valve's default). The TkG 10.17 layer carries
+  mainline Wine's `1`, so hidraw was off: SDL handed games an Xbox-style copy
+  of the pad, and nothing reached the raw DS4.
+- **xinput**: Luna's Sony direct path and `MYTHIX_DS4_GLYPHS=1`, ported to
+  proton_10.0's xinput. That xinput reads pads on an update thread, so the
+  port keeps the behaviour, not the hunks. With no XInput pad in slot 0, the
+  hidraw pad opens there. Its reports are read in the pad's own layout, and
+  rumble goes through winebus' haptics reports, over USB or Bluetooth. A Steam
+  Input virtual pad that claims the slot replaces it.
 
 ## Source locks and build-info
 

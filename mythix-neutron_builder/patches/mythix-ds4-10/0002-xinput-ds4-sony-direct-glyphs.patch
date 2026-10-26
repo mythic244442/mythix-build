@@ -1,0 +1,304 @@
+Mythix DualShock 4 for xinput, proton_10.0 tree (MYTHIX_DS4_GLYPHS=1)
+====================================================================
+
+Origin : Luna's xinput DS4 work in Neutron-11.0-21199 (patches/mythix-ds4-xinput),
+         carried to the proton_10.0 xinput. That xinput reads pads on an update
+         thread with per-controller locks, so this is a port of the behaviour,
+         not of the hunks.
+Applies: the mythix-10.17 tree. Fix 39 resets dlls/xinput1_3/main.c to the
+         proton_10.0 file before patch groups run, so this is its base.
+
+What it does (dlls/xinput1_3/main.c, shared by xinput1_1..1_4 and xinputuap;
+xinput9_1_0 forwards to xinput1_4 here):
+  * MYTHIX_DS4_GLYPHS=1: Sony pads (VID 054c) report "not connected" to
+    XInputGetState(Ex) and XInputGetKeystroke, so games with native PlayStation
+    support use HID (PlayStation glyphs). XInputGetCapabilities still succeeds
+    and XInputSetState still rumbles the pad.
+  * Sony direct path: winebus keeps a hidraw DS4 / DualSense as plain HID, so
+    when XInput slot 0 is empty the first Sony gamepad collection is opened
+    there. Its reports are read on the update thread in the pad's own layout
+    (USB report 0x01; winebus turns Bluetooth reports into it), and rumble
+    goes through winebus' haptics reports (USB and Bluetooth), or a native
+    0x05 report when the descriptor has none. A Steam Input virtual pad that
+    claims the slot replaces it.
+  * records each controller's vendor and product ID.
+---
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+index dfce831..3136947 100644
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -60,6 +60,9 @@ struct xinput_controller
+     HANDLE device;
+     WCHAR device_path[MAX_PATH];
+     BOOL enabled;
++    WORD vendor_id;
++    WORD product_id;
++    BOOL is_sony_direct;    /* Mythix: plain-HID Sony pad, see try_add_sony_hid */
+ 
+     struct
+     {
+@@ -123,6 +126,103 @@ static HANDLE start_event;
+ static HANDLE update_event;
+ static HANDLE steam_overlay_event;
+ 
++/* Mythix DualShock 4 (Luna's Neutron xinput, carried to the proton_10.0 tree).
++ *
++ * MYTHIX_DS4_GLYPHS=1 is native PlayStation mode: a Sony pad never shows up in
++ * XInputGetState(Ex) or XInputGetKeystroke, so games with native PlayStation
++ * support read it over HID and show PlayStation glyphs. XInput still has the
++ * pad open, so XInputGetCapabilities succeeds and XInputSetState rumbles it
++ * (Cyberpunk 2077 drives vibration through XInput).
++ *
++ * Sony direct path: winebus keeps a DS4 / DualSense on hidraw as a plain HID
++ * device, so no WINEXINPUT interface exists for it. When XInput slot 0 is
++ * empty, the first Sony gamepad collection is opened there instead; its input
++ * reports keep the pad's own layout. */
++#define SONY_VID 0x054c
++
++static BOOL check_sony_glyph_mode(void)
++{
++    static BOOL checked, enabled;
++
++    if (!checked)
++    {
++        const char *val = getenv("MYTHIX_DS4_GLYPHS");
++        enabled = val && val[0] == '1';
++        checked = TRUE;
++    }
++    return enabled;
++}
++
++static BOOL is_dualsense(WORD pid)
++{
++    return pid == 0x0ce6 || pid == 0x0df2;
++}
++
++static const WORD sony_dpad[8] =
++{
++    XINPUT_GAMEPAD_DPAD_UP,
++    XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_RIGHT,
++    XINPUT_GAMEPAD_DPAD_RIGHT,
++    XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_RIGHT,
++    XINPUT_GAMEPAD_DPAD_DOWN,
++    XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_LEFT,
++    XINPUT_GAMEPAD_DPAD_LEFT,
++    XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_LEFT,
++};
++
++/* input report 0x01; winebus turns the Bluetooth reports into the same layout */
++static BOOL DS4_get_state(struct xinput_controller *controller, const BYTE *buf, ULONG len, XINPUT_STATE *state)
++{
++    const BYTE *sticks = buf + 1, *buttons, *triggers;
++
++    if (len < 11 || buf[0] != 0x01) return FALSE;
++    if (is_dualsense(controller->product_id)) buttons = buf + 8, triggers = buf + 5;
++    else buttons = buf + 5, triggers = buf + 8;
++
++    memset(&state->Gamepad, 0, sizeof(state->Gamepad));
++    state->Gamepad.sThumbLX = (SHORT)(((int)sticks[0] - 128) << 8);
++    state->Gamepad.sThumbLY = (SHORT)((127 - (int)sticks[1]) << 8);
++    state->Gamepad.sThumbRX = (SHORT)(((int)sticks[2] - 128) << 8);
++    state->Gamepad.sThumbRY = (SHORT)((127 - (int)sticks[3]) << 8);
++    state->Gamepad.bLeftTrigger = triggers[0];
++    state->Gamepad.bRightTrigger = triggers[1];
++
++    if ((buttons[0] & 0x0f) < 8) state->Gamepad.wButtons |= sony_dpad[buttons[0] & 0x0f];
++    if (buttons[0] & 0x10) state->Gamepad.wButtons |= XINPUT_GAMEPAD_X;     /* square */
++    if (buttons[0] & 0x20) state->Gamepad.wButtons |= XINPUT_GAMEPAD_A;     /* cross */
++    if (buttons[0] & 0x40) state->Gamepad.wButtons |= XINPUT_GAMEPAD_B;     /* circle */
++    if (buttons[0] & 0x80) state->Gamepad.wButtons |= XINPUT_GAMEPAD_Y;     /* triangle */
++    if (buttons[1] & 0x01) state->Gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
++    if (buttons[1] & 0x02) state->Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
++    if (buttons[1] & 0x10) state->Gamepad.wButtons |= XINPUT_GAMEPAD_BACK;  /* share / create */
++    if (buttons[1] & 0x20) state->Gamepad.wButtons |= XINPUT_GAMEPAD_START; /* options */
++    if (buttons[1] & 0x40) state->Gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
++    if (buttons[1] & 0x80) state->Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;
++    if (buttons[2] & 0x01) state->Gamepad.wButtons |= XINPUT_GAMEPAD_GUIDE; /* PS */
++    return TRUE;
++}
++
++/* native DS4 rumble (USB output report 0x05), for a Sony direct pad whose
++ * descriptor has no haptics collection to go through winebus */
++static DWORD DS4_set_state(struct xinput_controller *controller, XINPUT_VIBRATION *state)
++{
++    ULONG report_len = controller->hid.caps.OutputReportByteLength;
++    BYTE *report_buf = (BYTE *)controller->hid.output_report_buf;
++    BOOL update = memcmp(&controller->vibration, state, sizeof(*state));
++
++    controller->vibration = *state;
++    if (!controller->enabled || !update || report_len < 32) return ERROR_SUCCESS;
++
++    memset(report_buf, 0, report_len);
++    report_buf[0] = 0x05;
++    report_buf[1] = 0x01;   /* motors only, leave the lightbar to the game */
++    report_buf[4] = state->wRightMotorSpeed >> 8;
++    report_buf[5] = state->wLeftMotorSpeed >> 8;
++    if (!HidD_SetOutputReport(controller->device, report_buf, report_len))
++        WARN("DS4 rumble report failed, error %lu\n", GetLastError());
++    return ERROR_SUCCESS;
++}
++
+ static void check_value_caps(struct xinput_controller *controller, USHORT usage, HIDP_VALUE_CAPS *caps)
+ {
+     switch (usage)
+@@ -270,7 +370,8 @@ static DWORD HID_set_state(struct xinput_controller *controller, XINPUT_VIBRATIO
+     NTSTATUS status;
+     BYTE report_id;
+ 
+-    if (!controller->hid.haptics_rumble_caps.UsagePage && !controller->hid.haptics_buzz_caps.UsagePage) return ERROR_SUCCESS;
++    if (!controller->hid.haptics_rumble_caps.UsagePage && !controller->hid.haptics_buzz_caps.UsagePage)
++        return controller->is_sony_direct ? DS4_set_state(controller, state) : ERROR_SUCCESS;
+ 
+     update_rumble = (controller->vibration.wLeftMotorSpeed != state->wLeftMotorSpeed);
+     controller->vibration.wLeftMotorSpeed = state->wLeftMotorSpeed;
+@@ -331,6 +432,8 @@ static void controller_destroy(struct xinput_controller *controller, BOOL alread
+         free(controller->hid.feature_report_buf);
+         HidD_FreePreparsedData(controller->hid.preparsed);
+         memset(&controller->hid, 0, sizeof(controller->hid));
++        controller->vendor_id = controller->product_id = 0;
++        controller->is_sony_direct = FALSE;
+     }
+ 
+     LeaveCriticalSection(&controller->crit);
+@@ -441,6 +544,7 @@ static BOOL open_device_at_index(const WCHAR *device_path, int index)
+ {
+     SP_DEVICE_INTERFACE_DATA iface = {sizeof(iface)};
+     PHIDP_PREPARSED_DATA preparsed;
++    HIDD_ATTRIBUTES attr = {sizeof(attr)};
+     HIDP_CAPS caps;
+     NTSTATUS status;
+     HANDLE device;
+@@ -449,6 +553,10 @@ static BOOL open_device_at_index(const WCHAR *device_path, int index)
+                          NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING, NULL);
+     if (device == INVALID_HANDLE_VALUE) return TRUE;
+ 
++    if (!HidD_GetAttributes(device, &attr)) attr.VendorID = attr.ProductID = 0;
++    controllers[index].vendor_id = attr.VendorID;
++    controllers[index].product_id = attr.ProductID;
++
+     preparsed = NULL;
+     if (!HidD_GetPreparsedData(device, &preparsed))
+         WARN("ignoring HID device, HidD_GetPreparsedData failed with error %lu\n", GetLastError());
+@@ -490,8 +598,12 @@ static BOOL find_opened_device(const WCHAR *device_path, int *free_slot)
+          swscanf(device_path, L"\\\\?\\HID#VID_28DE&PID_11FF&XI_%02u#", &i) == 1) &&
+         i < XUSER_MAX_COUNT && *free_slot != i)
+     {
++        /* Mythix: Steam Input owns a Sony direct pad, so that one steps aside */
++        BOOL sony_direct = controllers[i].is_sony_direct;
++
+         controller_destroy(&controllers[i], TRUE);
+-        if (*free_slot != XUSER_MAX_COUNT) open_device_at_index(controllers[i].device_path, *free_slot);
++        if (*free_slot != XUSER_MAX_COUNT && !sony_direct)
++            open_device_at_index(controllers[i].device_path, *free_slot);
+         *free_slot = i;
+     }
+ 
+@@ -516,6 +628,52 @@ static void try_remove_device(const WCHAR *device_path)
+         controller_destroy(&controllers[i], TRUE);
+ }
+ 
++static void try_add_sony_hid(void)
++{
++    char buffer[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + MAX_PATH * sizeof(WCHAR)];
++    SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
++    SP_DEVICE_INTERFACE_DATA iface = {sizeof(iface)};
++    HIDD_ATTRIBUTES attr;
++    HDEVINFO set;
++    HANDLE device;
++    DWORD idx;
++    GUID guid;
++    BOOL sony;
++
++    HidD_GetHidGuid(&guid);
++    set = SetupDiGetClassDevsW(&guid, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
++    detail->cbSize = sizeof(*detail);
++
++    for (idx = 0; !controllers[0].device && SetupDiEnumDeviceInterfaces(set, NULL, &guid, idx, &iface); idx++)
++    {
++        if (!SetupDiGetDeviceInterfaceDetailW(set, &iface, detail, sizeof(buffer), NULL, NULL))
++            continue;
++        /* winexinput's collections are the WINEXINPUT path's */
++        if (wcsstr(detail->DevicePath, L"&ig_") || wcsstr(detail->DevicePath, L"&IG_") ||
++            wcsstr(detail->DevicePath, L"&xi_") || wcsstr(detail->DevicePath, L"&XI_"))
++            continue;
++
++        device = CreateFileW(detail->DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
++        if (device == INVALID_HANDLE_VALUE) continue;
++        attr.Size = sizeof(attr);
++        sony = HidD_GetAttributes(device, &attr) && attr.VendorID == SONY_VID;
++        CloseHandle(device);
++        if (!sony) continue;
++
++        /* only the gamepad collection opens, see open_device_at_index */
++        open_device_at_index(detail->DevicePath, 0);
++        if (!controllers[0].device) continue;
++
++        EnterCriticalSection(&controllers[0].crit);
++        controllers[0].is_sony_direct = TRUE;
++        LeaveCriticalSection(&controllers[0].crit);
++        TRACE("Sony direct controller %04x:%04x %s at index 0%s\n", attr.VendorID, attr.ProductID,
++              debugstr_w(detail->DevicePath), check_sony_glyph_mode() ? ", rumble only (MYTHIX_DS4_GLYPHS)" : "");
++    }
++
++    SetupDiDestroyDeviceInfoList(set);
++}
++
+ static void update_controller_list(void)
+ {
+     char buffer[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + MAX_PATH * sizeof(WCHAR)];
+@@ -540,6 +698,8 @@ static void update_controller_list(void)
+     }
+ 
+     SetupDiDestroyDeviceInfoList(set);
++
++    if (!controllers[0].device) try_add_sony_hid();
+ }
+ 
+ static LONG sign_extend(ULONG value, const HIDP_VALUE_CAPS *caps)
+@@ -575,6 +735,12 @@ static void read_controller_state(struct xinput_controller *controller)
+         return;
+     }
+ 
++    if (controller->is_sony_direct)
++    {
++        if (!DS4_get_state(controller, (BYTE *)report_buf, read_len, &state)) state = controller->state;
++        goto done;
++    }
++
+     button_length = ARRAY_SIZE(buttons);
+     status = HidP_GetUsages(HidP_Input, HID_USAGE_PAGE_BUTTON, 0, buttons, &button_length, controller->hid.preparsed, report_buf, report_len);
+     if (status != HIDP_STATUS_SUCCESS) WARN("HidP_GetUsages HID_USAGE_PAGE_BUTTON returned %#lx\n", status);
+@@ -640,6 +806,7 @@ static void read_controller_state(struct xinput_controller *controller)
+     if (status != HIDP_STATUS_SUCCESS) WARN("HidP_GetUsageValue HID_USAGE_PAGE_GENERIC / HID_USAGE_GENERIC_Z returned %#lx\n", status);
+     else state.Gamepad.bLeftTrigger = scale_value(value, &controller->hid.lt_caps, 0, 255);
+ 
++done:
+     EnterCriticalSection(&controller->crit);
+     if (controller->enabled)
+     {
+@@ -845,6 +1012,12 @@ static DWORD xinput_get_state(DWORD index, XINPUT_STATE *state)
+     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+     if (!controller_lock(&controllers[index])) return ERROR_DEVICE_NOT_CONNECTED;
+ 
++    if (controllers[index].vendor_id == SONY_VID && check_sony_glyph_mode())
++    {
++        controller_unlock(&controllers[index]);
++        return ERROR_DEVICE_NOT_CONNECTED;
++    }
++
+     if (WaitForSingleObject(steam_overlay_event, 0) == WAIT_OBJECT_0) memset(state, 0, sizeof(*state));
+     else *state = controllers[index].state;
+ 
+@@ -998,6 +1171,12 @@ static DWORD check_for_keystroke(const DWORD index, XINPUT_KEYSTROKE *keystroke)
+ 
+     if (!controller_lock(controller)) return ERROR_DEVICE_NOT_CONNECTED;
+ 
++    if (controller->vendor_id == SONY_VID && check_sony_glyph_mode())
++    {
++        controller_unlock(controller);
++        return ERROR_DEVICE_NOT_CONNECTED;
++    }
++
+     cur = &controller->state.Gamepad;
+ 
+     /*** buttons ***/

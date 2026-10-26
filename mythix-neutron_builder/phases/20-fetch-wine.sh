@@ -55,6 +55,9 @@ fi
 # Layer 2: TkG patches — extracted by diffing Kron4ek wine-tkg against vanilla Wine
 # Layer 3: Wine-Staging patches
 # Layer 4: GE-Proton gaming patches
+# Layer 4b (profiles, PROFILE_STEAM_BRIDGE=ge): GE's lsteamclient + steam.exe
+#         added in-tree from the pinned GE checkout — built with this Wine,
+#         never downloaded from a foreign Proton
 # Layer 5: Our own Mythix custom patches
 # Profiles with PROFILE_PIPELINE=legacy inject their pins into this pipeline
 # (PIN_* hooks below); the patch pipeline has already prepared its tree.
@@ -477,6 +480,20 @@ if [ "$WINE_SOURCE_KEY" = "mythix-wine" ] && [ "${PROFILE_PIPELINE:-legacy}" = "
     # Commit the GE layer
     (cd "$WINE_SOURCE_DIR" && git add -A && \
         git commit -q -m "mythix-wine: GE-Proton patch layer" --allow-empty) 2>/dev/null || true
+
+    # ── Layer 4b: Steam client bridge (profile builds, PROFILE_STEAM_BRIDGE=ge) ──
+    # GE's lsteamclient + steam.exe sources, patched by GE's own helper
+    # section and added in-tree — built against THIS Wine, so the package
+    # never needs a foreign Proton's steam.exe/lsteamclient at package time.
+    if [ -n "$PROFILE_NAME" ] && [ "${PROFILE_STEAM_BRIDGE:-none}" = "ge" ]; then
+        section "Layer 4b: Steam client bridge (lsteamclient + steam.exe)"
+        # shellcheck source=../mythix-steam-bridge.sh
+        . "$(dirname "$PATCH_PIPELINE")/mythix-steam-bridge.sh"
+        mythix_steam_bridge_src "$GE_CACHE_DIR" "$SRC_ROOT"
+        LOG_DIR="$BUILD_RUN_DIR" \
+            mythix_add_steam_bridge "$WINE_SOURCE_DIR" "$MYTHIX_BRIDGE_SRC" \
+                "${STEAM_BRIDGE_SKIP_PATCH_DIRS:-}"
+    fi
 
     # ── Layer 5: Mythix custom patches ────────────────────────────────────
     _mythix_custom_patches="${PATCHES_DIR}/mythix-wine"
@@ -2352,10 +2369,12 @@ AFUNIX_EOF
 
     # ── Summary ───────────────────────────────────────────────────────────
     section "Mythix Wine source tree ready"
-    msg "Base:    Valve proton-wine bleeding-edge"
+    msg "Base:    Valve proton-wine ${MYTHIX_WINE_BASE}"
     msg "Layer 2: TkG patches (extracted from Kron4ek wine-tkg)"
     msg "Layer 3: Wine-Staging patches"
     msg "Layer 4: GE-Proton gaming patches"
+    [ "${PROFILE_STEAM_BRIDGE:-none}" = "ge" ] && \
+        msg "Layer 4b: Steam client bridge (lsteamclient + steam.exe, in-tree)"
     msg "Layer 5: Mythix custom patches (from patches/mythix-wine/)"
     msg2 "Full patch log: ${_mythix_patch_log}"
 
@@ -2374,6 +2393,12 @@ AFUNIX_EOF
             printf 'staging_commit=%s\n' "$(git -C "$_staging_dir" rev-parse HEAD 2>/dev/null)"
             printf 'ge_repo=%s\n' "${PIN_GE_REPO:-$GE_PROTON_REPO}"
             printf 'ge_commit=%s\n' "$(git -C "$GE_CACHE_DIR" rev-parse HEAD 2>/dev/null)"
+            if [ "${PROFILE_STEAM_BRIDGE:-none}" = "ge" ]; then
+                printf 'steam_bridge=ge bridge_ge_commit=%s lsteamclient_tree=%s steam_helper_tree=%s\n' \
+                    "$(git -C "${MYTHIX_BRIDGE_SRC:-$GE_CACHE_DIR}" rev-parse HEAD 2>/dev/null)" \
+                    "$(git -C "$WINE_SOURCE_DIR" rev-parse HEAD:dlls/lsteamclient 2>/dev/null)" \
+                    "$(git -C "$WINE_SOURCE_DIR" rev-parse HEAD:programs/steam_helper 2>/dev/null)"
+            fi
             printf 'created=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         } > "$_lock"
         ok "Source lock: ${_lock}"

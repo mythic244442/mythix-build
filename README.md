@@ -924,6 +924,11 @@ shows PlayStation glyphs. `XInputSetState` still rumbles it. The Mythix
 Launcher sets it for Cyberpunk 2077, RDR2, Elden Ring and The Witcher 3.
 `neutron diag` shows the active mode.
 
+On 10.17 (from 10.17-3), xinput has no GE Sony stack. hidraw is on by
+default, as in Proton. A hidraw pad stays plain HID, and xinput opens it in
+slot 0 when no other XInput pad is there.
+`MYTHIX_DS4_GLYPHS=1` works the same way as on 11.19.
+
 #### Patch System
 
 neutron-builder includes a full patch system (`neutron-patcher.sh`) that applies
@@ -936,6 +941,8 @@ automatically. The patch system below is for your own custom patches.
 - `mythix-ds4`: Mythix DualShock 4 support in winebus (hidraw haptics and LED).
 - `mythix-ds4-xinput`: Luna's xinput DS4 work for the Neutron 11.0 line, on
   Valve's stock xinput. The 11.19 profile carries its own xinput patch instead.
+- `mythix-ds4-10`: both DS4 layers for the proton_10.0 tree (mythix-10.17):
+  the winebus patch rebased, and Luna's xinput work ported to 10.0's xinput.
 - `custom/`: an empty template.
 
 Drop your own `.patch` files into `custom/` (or any new subdirectory) and the
@@ -988,11 +995,18 @@ The patcher creates a git checkpoint before applying, so you can revert with
 
 #### Steam Component Bootstrap
 
-neutron-builder auto-bootstraps proprietary Steam components during packaging.
+For profile builds with `PROFILE_STEAM_BRIDGE=ge` (all current profiles) the
+bridge is **built in-tree** from GE's own `lsteamclient`/`steam_helper` sources
+during source prep, ABI-matched to the Wine being built — nothing is
+downloaded. See `mythix-neutron_builder/profiles/README.md`.
+
+For non-profile builds (plain `--source kron4ek-tkg` etc.), neutron-builder
+auto-bootstraps proprietary Steam components during packaging as a fallback.
 It searches local Proton installs (Hotfix, Experimental, 9.0, 8.0, and any
 `Proton*` directory) across all Steam library roots. If no local Proton is found,
 it **downloads from [Kron4ek/proton-archive](https://github.com/Kron4ek/proton-archive)**
-(defaults to proton-10.0-4).
+(defaults to proton-10.0-4) — a last resort, since those binaries are
+ABI-matched to Proton's own Wine, not the one being packaged.
 
 **Components bootstrapped:**
 
