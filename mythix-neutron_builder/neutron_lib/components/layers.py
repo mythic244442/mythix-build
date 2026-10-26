@@ -126,11 +126,14 @@ class TranslationLayers(Component):
                 for dll in sorted(os.listdir(d)):
                     if not dll.lower().endswith(".dll"):
                         continue
+                    if dll.lower()[:-4] not in layer.dlls:
+                        # Wine's own libvkd3d placeholders and the like
+                        kv(f"{layer.name} {sub}/{dll}",
+                           "skipped (not in manifest, never installed)")
+                        continue
                     problem = check_translation_dll(os.path.join(d, dll), arch)
-                    shipped = dll.lower()[:-4] in layer.dlls
                     kv(f"{layer.name} {sub}/{dll}",
-                       ("ok" if problem is None else f"BAD — {problem}")
-                       + ("" if shipped else " (not in manifest, never installed)"))
+                       "ok" if problem is None else f"BAD — {problem}")
         if not found:
             kv("(none)", "no bundled DXVK/VKD3D-Proton dirs under files/lib/wine")
         kv("overrides style", profile()["d3d_override"]

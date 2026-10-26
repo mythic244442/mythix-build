@@ -661,7 +661,9 @@ class Session:
             print(f"\n== {title} ==")
 
         def kv(key, value):
-            print(f"  {key:<22} {value}")
+            # at least two spaces after the key, even past the column: the
+            # launcher's diag panel splits key from value on a 2-space run
+            print(f"  {key + ' ':<23} {value}")
 
         print("neutron diag — resolved launch configuration (no game launched)")
 
