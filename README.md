@@ -733,52 +733,9 @@ See [`profiles/README.md`](mythix-neutron_builder/profiles/README.md).
 | `staging` | Wine-Staging | Mainline + community patches (version picker) |
 | `proton-wine` | Valve proton-wine | Stable branches with interactive version picker |
 | `proton-wine-experimental` | Valve proton-wine experimental | Bleeding-edge, no picker |
-| `ge-proton` | GE-Proton (GloriousEggroll) | proton-wine + GE's full gaming patch set (version picker) |
+| `ge-proton` | GE-Proton (GloriousEggroll) | Staging + GE's full gaming patch set (version picker) |
 | `kron4ek-tkg` | Kron4ek wine-tkg | Mainline + Staging + TKG patches + ntsync |
 | `mythix-wine` | Mythix Wine | Valve proton-wine + TkG + Staging + GE (the works); base branch set with `--wine-base` |
-
-#### GE Neutron (GloriousEggroll)
-
-Select `ge-proton` as your source to build a **GE Neutron** — proton-wine with
-GloriousEggroll's full gaming patch set applied automatically. The version picker
-shows GE release tags (GE-Proton9-20, etc.) and resolves the matching proton-wine
-branch. The builder clones `proton-ge-custom`, runs GE's `protonprep-valve-staging.sh`
-to apply all patches, then compiles through the normal Neutron pipeline.
-
-**What GE's patches include:**
-- Wine-Staging (with GE's curated exclusions for Proton compatibility)
-- Wine-Wayland patches
-- ntsync hotfixes
-- FSR (FidelityFX Super Resolution) fullscreen hack
-- NVIDIA Reflex / VK_NV_low_latency2 support
-- Media Foundation / GStreamer codec support (in-game cutscenes, video playback)
-- Game-specific fixes: Star Citizen, Dragon Age Inquisition, Assetto Corsa, PSO2,
-  Le Mans Ultimate, Ghost of Tsushima (PSN login), Clannad, and more
-- Anti-cheat compatibility: EAC host block, hidden Wine exports
-- Performance: fast audio polling, ALSA channel override, exe relocation
-- DLSS upgrade patches, OpenXR support
-- Unity crash hotfix, D2D crash fix, write-watches spam reduction
-
-**First successful build:** 95,182 lines compiled, 106 files patched, 576 x64 DLLs +
-572 x86 DLLs, 1.5 GB packaged — zero build errors.
-
-Interactive GE release picker:
-
-```bash
-neutron-builder --source ge-proton
-```
-
-Pin to a specific release:
-
-```bash
-neutron-builder --source ge-proton --branch GE-Proton9-20
-```
-
-The resulting build appears in Steam as `mythix-ge-neutron-<version>`.
-
-**Post-patch fixups:** The builder automatically fixes known incompatibilities between
-GE's patches and certain proton-wine branches (e.g., `close_inproc_sync_obj` →
-`NtClose` in ntdll thread suspension code).
 
 #### DXVK & VKD3D-Proton Options
 
