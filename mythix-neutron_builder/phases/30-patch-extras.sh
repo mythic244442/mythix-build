@@ -27,6 +27,25 @@ if [ "$WINE_SOURCE_KEY" = "ge-proton" ]; then
 
     ok "GE source ready: ${GE_CACHE_DIR}"
 
+    # ── Match GE's own wine + wine-staging pins ─────────────────────────
+    # A GE release builds Valve wine and wine-staging at the commits its
+    # submodules pin (GE-Proton10/11: Valve bleeding-edge + a staging
+    # release, hence "wine-11.0 (Staging)"), not at a proton_X.0 branch tip
+    # or staging master. GE's patches are rebased onto exactly those trees.
+    _ge_wine_pin="$(git -C "$GE_CACHE_DIR" ls-tree HEAD wine 2>/dev/null | awk '{print $3}')"
+    _ge_staging_pin="$(git -C "$GE_CACHE_DIR" ls-tree HEAD wine-staging 2>/dev/null | awk '{print $3}')"
+    if [ -n "$_ge_wine_pin" ]; then
+        if ! git -C "$WINE_SOURCE_DIR" cat-file -e "${_ge_wine_pin}^{commit}" 2>/dev/null; then
+            msg2 "Fetching GE's wine pin ${_ge_wine_pin:0:12}…"
+            run git -C "$WINE_SOURCE_DIR" fetch -q origin "$_ge_wine_pin" || \
+                err "Could not fetch GE's wine pin ${_ge_wine_pin} from Valve wine"
+        fi
+        run git -C "$WINE_SOURCE_DIR" -c advice.detachedHead=false checkout -q -f "$_ge_wine_pin"
+        ok "Wine at GE's pin ${_ge_wine_pin:0:12} ($(git -C "$WINE_SOURCE_DIR" describe --tags --always 2>/dev/null))"
+    else
+        warn "GE checkout pins no wine submodule — staying on ${_wine_branch:-the fetched branch}"
+    fi
+
     # ── Apply GE patches via protonprep.sh ──────────────────────────────
     # protonprep.sh expects to be run from the GE repo root with the wine
     # source tree as a subdirectory or sibling.  We adapt to work with our
@@ -61,6 +80,16 @@ if [ "$WINE_SOURCE_KEY" = "ge-proton" ]; then
             run git clone --depth=1 \
                 "https://github.com/wine-staging/wine-staging.git" \
                 "$_ge_staging_dir"
+        fi
+        if [ -n "$_ge_staging_pin" ]; then
+            if ! git -C "$_ge_staging_dir" cat-file -e "${_ge_staging_pin}^{commit}" 2>/dev/null; then
+                run git -C "$_ge_staging_dir" fetch -q --depth=1 origin "$_ge_staging_pin" || \
+                    err "Could not fetch GE's wine-staging pin ${_ge_staging_pin}"
+            fi
+            run git -C "$_ge_staging_dir" -c advice.detachedHead=false checkout -q -f "$_ge_staging_pin"
+            ok "wine-staging at GE's pin ${_ge_staging_pin:0:12}"
+        else
+            warn "GE checkout pins no wine-staging submodule — using the wine-staging checkout as is"
         fi
         ln -sf "$_ge_staging_dir" "$_ge_staging_link"
 
