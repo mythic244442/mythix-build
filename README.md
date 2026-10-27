@@ -733,7 +733,7 @@ See [`profiles/README.md`](mythix-neutron_builder/profiles/README.md).
 | `staging` | Wine-Staging | Mainline + community patches (version picker) |
 | `proton-wine` | Valve proton-wine | Stable branches with interactive version picker |
 | `proton-wine-experimental` | Valve proton-wine experimental | Bleeding-edge, no picker |
-| `ge-proton` | GE-Proton (GloriousEggroll) | Staging + GE's full gaming patch set (version picker) |
+| `ge-proton` | GE-Proton (GloriousEggroll) | proton-wine/Staging + GE's full gaming patch set (version picker) |
 | `kron4ek-tkg` | Kron4ek wine-tkg | Mainline + Staging + TKG patches + ntsync |
 | `mythix-wine` | Mythix Wine | Valve proton-wine + TkG + Staging + GE (the works); base branch set with `--wine-base` |
 
