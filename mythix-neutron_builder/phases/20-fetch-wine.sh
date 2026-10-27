@@ -1605,6 +1605,17 @@ for i, l in enumerate(lines):
         _hdr_file="${WINE_SOURCE_DIR}/include/${_hdr}"
         _makefile_in="${WINE_SOURCE_DIR}/include/Makefile.in"
         if [ -d "${WINE_SOURCE_DIR}/dlls/${_mod}" ] && [ ! -f "${WINE_SOURCE_DIR}/include/${_mod}.idl" ]; then
+            if [ "$MYTHIX_WINE_BASE" != "proton_10.0" ]; then
+                # bleeding-edge: staging's dll now implements the interfaces
+                # mainline defines in ${_mod}.idl (which Valve's tree lacks, along
+                # with the .idl headers it imports), so a stub header can't
+                # build it. Nothing in Proton uses it: leave the dll out.
+                rm -rf "${WINE_SOURCE_DIR}/dlls/${_mod}"
+                sed -i "\|^WINE_CONFIG_MAKEFILE(dlls/${_mod})\$|d" "${WINE_SOURCE_DIR}/configure.ac"
+                ok "Fixup: left out dlls/${_mod} (needs mainline's ${_mod}.idl)"
+                (( _fixups_applied++ )) || true
+                continue
+            fi
             if [ ! -f "$_hdr_file" ]; then
                 printf "/* Auto-generated stub (mythix-wine fixup) */\n" > "$_hdr_file"
             fi
@@ -1713,7 +1724,15 @@ open('$_shell32_res/$_bmp','wb').write(bmp)
     if [ -d "$_vkd3d_ref" ] && [ -d "$_vkd3d_src" ]; then
         _src_has="$(grep -c 'vsir_compile_info_init' "$_vkd3d_src/libs/vkd3d-shader/vkd3d_shader_private.h" 2>/dev/null; true)"
         _ref_has="$(grep -c 'vsir_compile_info_init' "$_vkd3d_ref/libs/vkd3d-shader/vkd3d_shader_private.h" 2>/dev/null; true)"
-        if [ "$_src_has" -eq 0 ] && [ "$_ref_has" -gt 0 ]; then
+        # The marker is gone from newer vkd3d (TkG 11.11 ships 2.0 against
+        # Valve's 1.18): on bleeding-edge, also swap when the versions differ,
+        # or the patch layers leave a half-updated vkd3d that can't build.
+        _src_ver="$(sed -n 's/^#define PACKAGE_VERSION "\(.*\)"/\1/p' "$_vkd3d_src/config.h" 2>/dev/null)"
+        _ref_ver="$(sed -n 's/^#define PACKAGE_VERSION "\(.*\)"/\1/p' "$_vkd3d_ref/config.h" 2>/dev/null)"
+        if { [ "$_src_has" -eq 0 ] && [ "$_ref_has" -gt 0 ]; } || \
+           { [ "$MYTHIX_WINE_BASE" != "proton_10.0" ] && [ -n "$_ref_ver" ] && \
+             [ "$_src_ver" != "$_ref_ver" ]; }; then
+            msg2 "vkd3d ${_src_ver:-?} in the tree, ${_ref_ver:-?} in TkG"
             sudo rm -rf "$_vkd3d_src" 2>/dev/null || rm -rf "$_vkd3d_src"
             cp -a "$_vkd3d_ref" "$_vkd3d_src"
             # TkG vkd3d references spirv/unified1/ headers; create symlinks to vulkan/ equivalents
@@ -1725,8 +1744,11 @@ open('$_shell32_res/$_bmp','wb').write(bmp)
             echo "/* stub */" > "$_vkd3d_src/include/spirv-tools/libspirv.h"
             # Ensure user ownership so container root-owned leftovers don't block future runs
             chown -R "$(id -u):$(id -g)" "$_vkd3d_src" 2>/dev/null || true
-            # Clear stale vkd3d build artifacts from previous runs
-            for _vkd3d_build in "${BUILD_RUN_DIR}/wine-unified/libs/vkd3d" "${BUILD_RUN_DIR}/${BUILD_NAME}/wine64/libs/vkd3d"; do
+            # cp -a keeps TkG's older mtimes, so make would trust generated
+            # files (preproc.tab.c etc.) left from the replaced vkd3d: date the
+            # new tree now, and clear vkd3d build output from earlier runs
+            find "$_vkd3d_src" -exec touch -h {} + 2>/dev/null || true
+            for _vkd3d_build in "${BUILD_RUN_DIR}"/{wine-unified,wine64,wine32}/libs/vkd3d; do
                 [ -d "$_vkd3d_build" ] && { sudo rm -rf "$_vkd3d_build" 2>/dev/null || rm -rf "$_vkd3d_build"; }
             done
             ok "Fixup: replaced libs/vkd3d with TkG-compatible version"
@@ -2031,6 +2053,11 @@ AFUNIX_EOF
     # Staging patches partially apply on proton_10.0 and create broken hybrid code.
     # These files are excluded from the generic Fix 7 dedup. Instead, revert them
     # to just after TkG patches (before staging) using the TkG commit tag.
+    # Fixes 31a2, 33, 34 and 41 are proton_10.0-only (written for 10.17): on
+    # bleeding-edge they put back Valve's files next to TkG/GE code that
+    # depends on the patched versions (thread_layout, FSR, vkd3d-utils, LAA).
+    _base_10=false
+    [ "$MYTHIX_WINE_BASE" = "proton_10.0" ] && _base_10=true
     _server_fixed=false
 
     # Find the TkG commit — it's the one that applied TkG patches
@@ -2043,7 +2070,7 @@ AFUNIX_EOF
         fi
     done < <(cd "$WINE_SOURCE_DIR" && git log --format='%h %s' 2>/dev/null || true)
 
-    if [ -n "$_tkg_commit" ]; then
+    if [ "$_base_10" = true ] && [ -n "$_tkg_commit" ]; then
         for _srv_file in server/queue.c server/registry.c server/fd.c; do
             _full="${WINE_SOURCE_DIR}/${_srv_file}"
             [ -f "$_full" ] || continue
@@ -2054,7 +2081,7 @@ AFUNIX_EOF
     fi
 
     # Fallback: if TkG commit not found, try stash copies then git show
-    if [ "$_server_fixed" = false ]; then
+    if [ "$_base_10" = true ] && [ "$_server_fixed" = false ]; then
         for _srv_file in server/queue.c server/registry.c server/fd.c; do
             _full="${WINE_SOURCE_DIR}/${_srv_file}"
             _stash="${WINE_SOURCE_DIR}/.mythix-base-stash/${_srv_file}"
@@ -2071,6 +2098,7 @@ AFUNIX_EOF
         ok "Fixup: reverted server/ files to pre-staging state (incompatible patches)"
         (( _fixups_applied++ )) || true
     fi
+
 
     # Fix 31a5: msado15/connection.c — staging adds 'dso' member not in proton's struct
     _msado_conn="${WINE_SOURCE_DIR}/dlls/msado15/connection.c"
@@ -2109,7 +2137,7 @@ AFUNIX_EOF
     for _w32u_file in class.c imm.c input.c message.c window.c cursoricon.c defwnd.c hook.c menu.c ntuser_private.h win32u_private.h sysparams.c; do
         _w32u_path="${WINE_SOURCE_DIR}/dlls/win32u/${_w32u_file}"
         _w32u_stash="${WINE_SOURCE_DIR}/.mythix-base-stash/dlls/win32u/${_w32u_file}"
-        if [ -f "$_w32u_path" ] && [ -f "$_w32u_stash" ]; then
+        if [ "$_base_10" = true ] && [ -f "$_w32u_path" ] && [ -f "$_w32u_stash" ]; then
             if ! diff -q "$_w32u_path" "$_w32u_stash" >/dev/null 2>&1; then
                 cp "$_w32u_stash" "$_w32u_path"
                 ok "Fixup: reverted win32u/${_w32u_file} to proton base (staging mismatch)"
@@ -2121,7 +2149,7 @@ AFUNIX_EOF
     # Fix 34: libs/vkd3d/libs/vkd3d-shader — staging breaks proton's bundled vkd3d wholesale
     _vkd3d_dir="${WINE_SOURCE_DIR}/libs/vkd3d/libs/vkd3d-shader"
     _vkd3d_stash="${WINE_SOURCE_DIR}/.mythix-base-stash/libs/vkd3d/libs/vkd3d-shader"
-    if [ -d "$_vkd3d_dir" ] && [ -d "$_vkd3d_stash" ]; then
+    if [ "$_base_10" = true ] && [ -d "$_vkd3d_dir" ] && [ -d "$_vkd3d_stash" ]; then
         if ! diff -rq "$_vkd3d_dir" "$_vkd3d_stash" >/dev/null 2>&1; then
             cp -a "$_vkd3d_stash/." "$_vkd3d_dir/"
             ok "Fixup: reverted libs/vkd3d/libs/vkd3d-shader/ to proton base (staging incompatible)"
@@ -2162,6 +2190,21 @@ AFUNIX_EOF
         fi
     fi
 
+    # Fix 45: server/queue.c — GE's 0018-server-Fix-numpad-vkey-handling lands
+    # half-way on older bleeding-edge (11.11): its user.h hunk drops
+    # desktop->keystate (the key state lives in desktop->shared now), but the
+    # queue.c hunk misses, leaving the numpad vkey check on the removed field.
+    # Finish the patch: read the shared key state like the rest of the function.
+    _queue_c="${WINE_SOURCE_DIR}/server/queue.c"
+    _user_h="${WINE_SOURCE_DIR}/server/user.h"
+    if [ -f "$_queue_c" ] && [ -f "$_user_h" ] && \
+       ! grep -q 'keystate\[256\];.*asynchronous key state' "$_user_h" && \
+       grep -q 'desktop->keystate\[' "$_queue_c"; then
+        sed -i 's/desktop->keystate\[/desktop_shm->keystate[/g' "$_queue_c"
+        ok "Fixup: server/queue.c numpad check → desktop_shm->keystate (GE 0018 half-applied)"
+        (( _fixups_applied++ )) || true
+    fi
+
     # Fix 44: krnl386.exe16/instr.c — staging renames gdt/ldt vars (not in proton)
     _instr_c="${WINE_SOURCE_DIR}/dlls/krnl386.exe16/instr.c"
     _instr_stash="${WINE_SOURCE_DIR}/.mythix-base-stash/dlls/krnl386.exe16/instr.c"
@@ -2198,7 +2241,7 @@ AFUNIX_EOF
     # Fix 41: wow64/system.c — TkG adds __wine_needs_override_large_address_aware (not in proton)
     _wow64_c="${WINE_SOURCE_DIR}/dlls/wow64/system.c"
     _wow64_stash="${WINE_SOURCE_DIR}/.mythix-base-stash/dlls/wow64/system.c"
-    if [ -f "$_wow64_c" ] && [ -f "$_wow64_stash" ]; then
+    if [ "$_base_10" = true ] && [ -f "$_wow64_c" ] && [ -f "$_wow64_stash" ]; then
         if ! diff -q "$_wow64_c" "$_wow64_stash" >/dev/null 2>&1; then
             cp "$_wow64_stash" "$_wow64_c"
             ok "Fixup: reverted wow64/system.c to proton base (TkG large_address_aware)"
