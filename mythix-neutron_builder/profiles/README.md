@@ -182,7 +182,7 @@ Three layers handle a Sony pad:
 The Neutron 11.0 line (Valve's stock xinput) keeps Luna's original xinput
 change, with its Sony direct path, in the patch group `mythix-ds4-xinput`.
 
-## DualShock 4 / DualSense (mythix-10.17)
+## DualShock 4 / DualSense (mythix-10.17, mythix-11.11)
 
 The patch group `mythix-ds4-10` carries both layers for the proton_10.0 tree:
 
@@ -196,6 +196,12 @@ The patch group `mythix-ds4-10` carries both layers for the proton_10.0 tree:
   hidraw pad opens there. Its reports are read in the pad's own layout, and
   rumble goes through winebus' haptics reports, over USB or Bluetooth. A Steam
   Input virtual pad that claims the slot replaces it.
+
+`mythix-ds4-11.11` does the same for the mythix-11.11 tree (Valve
+bleeding-edge): the winebus patch rebased (one hunk re-anchored) with the same
+`DisableHidraw=0` fix, since TkG 11.11 carries mainline's `1` as well. Valve's
+11.0-line xinput is already the one `mythix-ds4-xinput` targets, so that patch
+goes in as is.
 
 ## Source locks and build-info
 

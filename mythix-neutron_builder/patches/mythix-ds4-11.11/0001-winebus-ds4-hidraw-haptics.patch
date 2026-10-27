@@ -1,0 +1,440 @@
+Mythix DualShock 4 support for winebus (hidraw), mythix-11.11 tree
+=================================================================
+
+Origin : patches/mythix-ds4/0001 (Luna's in-tree edits to the Neutron-11.0-21199
+         source), rebased onto the mythix-11.11 tree (Valve bleeding-edge 91e9e8f +
+         TkG 11.11 + GE). Same changes; one hunk is re-anchored because
+         udev_add_device's Steam virtual controller branch differs here.
+Applies: the mythix-11.11 tree (legacy pipeline, source key mythix-wine)
+
+What it does:
+  * dlls/winebus.sys/bus_udev.c — Sony controller detection on hidraw, HID descriptor
+    augmentation with Wine's haptics reports, haptics → native DS4 rumble translation
+    (0x05 USB / 0x11 BT), passthrough of native DS4 output reports (LED control),
+    evdev path no longer drops devices on the SDL ignore list
+  * dlls/winebus.sys/main.c — hidraw on by default again (DisableHidraw=0, Valve's
+    default). The TkG 11.11 layer carries mainline Wine's default of 1, which left
+    hidraw off: SDL then handed games an Xbox-style copy of the pad (Xbox glyphs,
+    no raw DS4 for native PlayStation support). DisableInput keeps TkG's 1. A
+    prefix can still set DisableHidraw=1 under Services\winebus.
+  * dlls/hidclass.sys/pnp.c — don't toggle a device interface that was never registered
+---
+diff --git a/dlls/hidclass.sys/pnp.c b/dlls/hidclass.sys/pnp.c
+--- a/dlls/hidclass.sys/pnp.c
++++ b/dlls/hidclass.sys/pnp.c
+@@ -567,6 +567,7 @@
+         }
+ 
+         case IRP_MN_START_DEVICE:
++        {
+             send_wm_input_device_change( pdo, GIDC_ARRIVAL );
+ 
+             if ((status = IoRegisterDeviceInterface( device, pdo->base.class_guid, NULL, &pdo->link_name )))
+@@ -587,18 +588,19 @@
+                     pdo->is_keyboard = TRUE;
+             }
+ 
+-            IoSetDeviceInterfaceState( &pdo->link_name, TRUE );
++            if (pdo->link_name.Buffer) IoSetDeviceInterfaceState( &pdo->link_name, TRUE );
+             if (pdo->is_mouse) IoSetDeviceInterfaceState( &pdo->mouse_link_name, TRUE );
+             if (pdo->is_keyboard) IoSetDeviceInterfaceState( &pdo->keyboard_link_name, TRUE );
+ 
+             pdo->removed = FALSE;
+             status = STATUS_SUCCESS;
+             break;
++        }
+ 
+         case IRP_MN_REMOVE_DEVICE:
+             send_wm_input_device_change( pdo, GIDC_REMOVAL );
+ 
+-            IoSetDeviceInterfaceState( &pdo->link_name, FALSE );
++            if (pdo->link_name.Buffer) IoSetDeviceInterfaceState( &pdo->link_name, FALSE );
+             if (pdo->is_mouse) IoSetDeviceInterfaceState( &pdo->mouse_link_name, FALSE );
+             if (pdo->is_keyboard) IoSetDeviceInterfaceState( &pdo->keyboard_link_name, FALSE );
+ 
+diff --git a/dlls/winebus.sys/bus_udev.c b/dlls/winebus.sys/bus_udev.c
+--- a/dlls/winebus.sys/bus_udev.c
++++ b/dlls/winebus.sys/bus_udev.c
+@@ -115,6 +115,10 @@
+ struct hidraw_device
+ {
+     struct base_device base;
++    BOOL is_sony;
++    BOOL is_bluetooth;
++    BOOL sony_haptics_ready;
++    WORD pid;
+ };
+ 
+ static inline struct hidraw_device *hidraw_impl_from_unix_device(struct unix_device *iface)
+@@ -309,6 +313,131 @@
+     pthread_mutex_unlock(&udev_cs);
+ }
+ 
++#pragma pack(push,1)
++struct hid_haptics_intensity
++{
++    UINT16 rumble_intensity;
++    UINT16 buzz_intensity;
++    UINT16 left_intensity;
++    UINT16 right_intensity;
++};
++#pragma pack(pop)
++
++#define SONY_VID 0x054c
++
++/* DS4/DualSense HID descriptors use non-standard axis assignments:
++ *   Z/Rz for right stick, Rx/Ry for triggers
++ * but winexinput expects the XInput-standard layout:
++ *   Rx/Ry for right stick, Z/Rz for triggers
++ * Swap the usage bytes in the raw descriptor so the mapping is correct. */
++static void remap_sony_axes(BYTE *data, SIZE_T size)
++{
++    BYTE usage_page = 0;
++    SIZE_T i = 0;
++    while (i < size)
++    {
++        BYTE b = data[i];
++        int bsize = b & 0x03;
++        int btype = (b >> 2) & 0x03;
++        int btag = (b >> 4) & 0x0F;
++        if (bsize == 3) bsize = 4;
++        if (btype == 1 && btag == 0 && bsize >= 1)
++            usage_page = data[i + 1];
++        if (btype == 2 && btag == 0 && bsize >= 1 && usage_page == 0x01)
++        {
++            switch (data[i + 1])
++            {
++            case 0x32: data[i + 1] = 0x33; break; /* Z  → Rx (right stick X) */
++            case 0x33: data[i + 1] = 0x32; break; /* Rx → Z  (left trigger)  */
++            case 0x34: data[i + 1] = 0x35; break; /* Ry → Rz (right trigger) */
++            case 0x35: data[i + 1] = 0x34; break; /* Rz → Ry (right stick Y) */
++            }
++        }
++        i += 1 + bsize;
++    }
++}
++
++static BOOL hidraw_desc_append(struct hid_report_descriptor *desc, const BYTE *data, SIZE_T size)
++{
++    if (desc->size + size > desc->max_size)
++    {
++        SIZE_T new_max = desc->max_size * 3 / 2;
++        BYTE *tmp;
++        if (new_max < desc->size + size) new_max = desc->size + size;
++        tmp = realloc(desc->data, new_max);
++        if (!tmp) return FALSE;
++        desc->data = tmp;
++        desc->max_size = new_max;
++    }
++    memcpy(desc->data + desc->size, data, size);
++    desc->size += size;
++    return TRUE;
++}
++
++static BOOL hidraw_desc_seed(struct hid_report_descriptor *desc, const BYTE *data, SIZE_T size)
++{
++    BYTE *tmp = realloc(desc->data, size);
++    if (!tmp) return FALSE;
++    memcpy(tmp, data, size);
++    desc->data = tmp;
++    desc->size = size;
++    desc->max_size = size;
++
++    BYTE max_id = 0;
++    for (SIZE_T i = 0; i + 1 < size; i++)
++    {
++        if (data[i] == 0x85)
++        {
++            if (data[i + 1] > max_id) max_id = data[i + 1];
++            i++;
++        }
++    }
++    desc->next_report_id[0] = max_id + 1;
++    desc->next_report_id[1] = max_id + 1;
++    desc->next_report_id[2] = max_id + 1;
++
++    return TRUE;
++}
++
++/* Find the closing 0xc0 of the FIRST Application collection in a HID
++ * descriptor.  Returns the byte offset, or -1 on failure. */
++static int find_first_app_collection_end(const BYTE *desc, SIZE_T size)
++{
++    SIZE_T i = 0;
++    int depth = 0;
++    BOOL found_app = FALSE;
++
++    while (i < size)
++    {
++        BYTE b = desc[i];
++
++        if (b == 0xfe && i + 2 < size)      /* long item */
++        {
++            i += 3 + desc[i + 1];
++            continue;
++        }
++
++        int item_size = b & 0x03;
++        if (item_size == 3) item_size = 4;   /* HID encoding: 3 → 4 bytes */
++
++        if (b == 0xa1 && i + 1 < size)       /* COLLECTION(type) */
++        {
++            if (depth == 0 && desc[i + 1] == 0x01)
++                found_app = TRUE;
++            depth++;
++        }
++        else if (b == 0xc0)                  /* END_COLLECTION */
++        {
++            depth--;
++            if (found_app && depth == 0)
++                return (int)i;
++        }
++
++        i += 1 + item_size;
++    }
++    return -1;
++}
++
+ static NTSTATUS hidraw_device_get_report_descriptor(struct unix_device *iface, BYTE *buffer,
+                                                     UINT length, UINT *out_length)
+ {
+@@ -316,6 +445,84 @@
+     struct hidraw_report_descriptor descriptor;
+     struct hidraw_device *impl = hidraw_impl_from_unix_device(iface);
+ 
++    /* For Sony controllers, build the descriptor once with proper haptics appended */
++    if (impl->is_sony && !impl->sony_haptics_ready)
++    {
++        if (ioctl(impl->base.device_fd, HIDIOCGRDESCSIZE, &descriptor.size) == -1)
++        {
++            WARN("ioctl(HIDIOCGRDESCSIZE) failed: %d %s\n", errno, strerror(errno));
++            return STATUS_UNSUCCESSFUL;
++        }
++        if (descriptor.size && ioctl(impl->base.device_fd, HIDIOCGRDESC, &descriptor) == -1)
++        {
++            WARN("ioctl(HIDIOCGRDESC) failed: %d %s\n", errno, strerror(errno));
++            return STATUS_UNSUCCESSFUL;
++        }
++
++        /* Insert haptics inside the FIRST Application collection (gamepad).
++         * The DS4 descriptor has multiple top-level collections; xinput only
++         * opens the gamepad one, so haptics must live there. */
++        {
++            int split = find_first_app_collection_end(descriptor.value, descriptor.size);
++            if (split < 0)
++            {
++                WARN("Could not find gamepad Application collection end\n");
++                if (!hidraw_desc_seed(&iface->hid_report_descriptor,
++                                      descriptor.value, descriptor.size))
++                    return STATUS_NO_MEMORY;
++                /* no axis remap — game handles DS4 axes natively */
++            }
++            else
++            {
++                static const BYTE end_coll[] = {0xc0};
++                BYTE max_id = 0;
++                /* bytes before the first app-collection's closing 0xc0 */
++                if (!hidraw_desc_seed(&iface->hid_report_descriptor,
++                                      descriptor.value, split))
++                    return STATUS_NO_MEMORY;
++                /* Override next_report_id with scan of FULL hardware descriptor
++                 * so haptics IDs don't collide with ANY collection. */
++                for (SIZE_T ri = 0; ri + 1 < descriptor.size; ri++)
++                {
++                    if (descriptor.value[ri] == 0x85)
++                    {
++                        if (descriptor.value[ri + 1] > max_id) max_id = descriptor.value[ri + 1];
++                        ri++;
++                    }
++                }
++                iface->hid_report_descriptor.next_report_id[0] = max_id + 1;
++                iface->hid_report_descriptor.next_report_id[1] = max_id + 1;
++                iface->hid_report_descriptor.next_report_id[2] = max_id + 1;
++                /* haptics goes inside the gamepad collection */
++                if (!hid_device_add_haptics(iface))
++                    return STATUS_NO_MEMORY;
++                /* close the first app collection */
++                if (!hidraw_desc_append(&iface->hid_report_descriptor, end_coll, 1))
++                    return STATUS_NO_MEMORY;
++                /* append remaining collections (vendor-specific, audio, etc.) */
++                if (split + 1 < (int)descriptor.size)
++                {
++                    if (!hidraw_desc_append(&iface->hid_report_descriptor,
++                                            descriptor.value + split + 1,
++                                            descriptor.size - split - 1))
++                        return STATUS_NO_MEMORY;
++                }
++            }
++        }
++
++        impl->sony_haptics_ready = TRUE;
++    }
++
++    if (impl->is_sony)
++    {
++        *out_length = iface->hid_report_descriptor.size;
++        if (length < iface->hid_report_descriptor.size)
++            return STATUS_BUFFER_TOO_SMALL;
++        memcpy(buffer, iface->hid_report_descriptor.data, iface->hid_report_descriptor.size);
++        return STATUS_SUCCESS;
++    }
++
++    /* Non-Sony: read directly from hardware as before */
+     if (ioctl(impl->base.device_fd, HIDIOCGRDESCSIZE, &descriptor.size) == -1)
+     {
+         WARN("ioctl(HIDIOCGRDESCSIZE) failed: %d %s\n", errno, strerror(errno));
+@@ -323,7 +530,6 @@
+     }
+ 
+     *out_length = descriptor.size;
+-
+     if (length < descriptor.size)
+         return STATUS_BUFFER_TOO_SMALL;
+     if (!descriptor.size)
+@@ -374,6 +580,70 @@
+     BYTE buffer[8192];
+     int count = 0;
+ 
++    /* Sony haptics via Wine's standard haptics protocol (from XInput/dinput) */
++    if (impl->is_sony && impl->sony_haptics_ready &&
++        packet->reportId == iface->hid_haptics.intensity_report)
++    {
++        struct hid_haptics_intensity *report = (struct hid_haptics_intensity *)(packet->reportBuffer + 1);
++        BYTE strong = (BYTE)(report->rumble_intensity >> 8);
++        BYTE weak = (BYTE)(report->buzz_intensity >> 8);
++        BOOL is_dualsense = (impl->pid == 0x0ce6 || impl->pid == 0x0df2);
++
++        if (is_dualsense)
++        {
++            if (impl->is_bluetooth)
++            {
++                BYTE buf[78];
++                memset(buf, 0, sizeof(buf));
++                buf[0] = 0x31; buf[1] = 0x02; buf[2] = 0x03; buf[3] = 0x14;
++                buf[4] = strong; buf[5] = weak;
++                count = write(impl->base.device_fd, buf, sizeof(buf));
++            }
++            else
++            {
++                BYTE buf[48];
++                memset(buf, 0, sizeof(buf));
++                buf[0] = 0x02; buf[1] = 0x03; buf[2] = 0x14;
++                buf[3] = strong; buf[4] = weak;
++                count = write(impl->base.device_fd, buf, sizeof(buf));
++            }
++        }
++        else
++        {
++            if (impl->is_bluetooth)
++            {
++                BYTE buf[78];
++                memset(buf, 0, sizeof(buf));
++                buf[0] = 0x11; buf[1] = 0xc0; buf[2] = 0x20;
++                buf[3] = 0xf3; buf[4] = 0x04; buf[5] = 0x00;
++                buf[6] = weak; buf[7] = strong;
++                count = write(impl->base.device_fd, buf, sizeof(buf));
++            }
++            else
++            {
++                BYTE buf[32];
++                memset(buf, 0, sizeof(buf));
++                buf[0] = 0x05; buf[1] = 0x07;
++                buf[4] = weak; buf[5] = strong;
++                count = write(impl->base.device_fd, buf, sizeof(buf));
++            }
++        }
++
++        io->Information = count > 0 ? count : 0;
++        io->Status = count > 0 ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
++        return;
++    }
++
++    /* For Sony: pass through native DS4/DS5 output reports (lightbar, etc.) */
++    if (impl->is_sony && (packet->reportId == 0x05 || packet->reportId == 0x11 ||
++                          packet->reportId == 0x02))
++    {
++        count = write(impl->base.device_fd, packet->reportBuffer, length);
++        io->Information = count > 0 ? count : 0;
++        io->Status = count > 0 ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
++        return;
++    }
++
+     if ((buffer[0] = packet->reportId))
+         count = write(impl->base.device_fd, packet->reportBuffer, length);
+     else if (length > sizeof(buffer) - 1)
+@@ -406,6 +676,16 @@
+     BYTE buffer[8192];
+     int count = 0;
+ 
++    if (impl->is_sony && impl->sony_haptics_ready &&
++        packet->reportId == iface->hid_haptics.features_report)
++    {
++        struct hid_haptics_features *features = (struct hid_haptics_features *)(packet->reportBuffer + 1);
++        io->Information = sizeof(*features) + 1;
++        *features = iface->hid_haptics.features;
++        io->Status = STATUS_SUCCESS;
++        return;
++    }
++
+     if ((buffer[0] = packet->reportId) && length <= 0x1fff)
+         count = ioctl(impl->base.device_fd, HIDIOCGFEATURE(length), packet->reportBuffer);
+     else if (length > sizeof(buffer) - 1)
+@@ -442,6 +722,19 @@
+     BYTE buffer[8192];
+     int count = 0;
+ 
++    if (impl->is_sony && impl->sony_haptics_ready &&
++        packet->reportId == iface->hid_haptics.features_report)
++    {
++        struct hid_haptics_features *features = (struct hid_haptics_features *)(packet->reportBuffer + 1);
++        io->Information = sizeof(*features) + 1;
++        iface->hid_haptics.features.rumble.cutoff_time_ms = features->rumble.cutoff_time_ms;
++        iface->hid_haptics.features.buzz.cutoff_time_ms = features->buzz.cutoff_time_ms;
++        iface->hid_haptics.features.left.cutoff_time_ms = features->left.cutoff_time_ms;
++        iface->hid_haptics.features.right.cutoff_time_ms = features->right.cutoff_time_ms;
++        io->Status = STATUS_SUCCESS;
++        return;
++    }
++
+     if ((buffer[0] = packet->reportId) && length <= 0x1fff)
+         count = ioctl(impl->base.device_fd, HIDIOCSFEATURE(length), packet->reportBuffer);
+     else if (length > sizeof(buffer) - 1)
+@@ -1528,6 +1821,17 @@
+     strcpy(impl->devnode, devnode);
+     impl->device_fd = fd;
+ 
++    {
++        struct hidraw_device *hidraw = CONTAINING_RECORD(impl, struct hidraw_device, base);
++        hidraw->is_sony = (desc.vid == SONY_VID);
++        hidraw->is_bluetooth = (desc.bus_type == BUS_TYPE_BLUETOOTH);
++        hidraw->pid = desc.pid;
++        hidraw->sony_haptics_ready = FALSE;
++        if (hidraw->is_sony)
++            TRACE("Mythix: Sony controller VID=%04x PID=%04x bus=%s\n",
++                  desc.vid, desc.pid, hidraw->is_bluetooth ? "BT" : "USB");
++    }
++
+     TRACE("dev %p, node %s, desc %s.\n", dev, debugstr_a(devnode), debugstr_device_desc(&desc));
+     bus_event_queue_device_created(&event_queue, &impl->unix_device, &desc);
+     return STATUS_SUCCESS;
+@@ -1761,7 +2065,7 @@
+         TRACE("evdev %s: detected steam input virtual controller\n", debugstr_a(devnode));
+         desc.is_gamepad = TRUE;
+     }
+-    else if (is_sdl_ignored_device(desc.vid, desc.pid))
++    else if (/* SDL callsite patched */ FALSE)
+     {
+         TRACE("evdev %s: ignoring %s, in SDL ignore list\n", debugstr_a(devnode), debugstr_device_desc(&desc));
+         close(fd);
+diff --git a/dlls/winebus.sys/main.c b/dlls/winebus.sys/main.c
+--- a/dlls/winebus.sys/main.c
++++ b/dlls/winebus.sys/main.c
+@@ -1292,7 +1292,7 @@
+ {
+     options.disable_sdl = !check_bus_option(L"Enable SDL", 1);
+     if (options.disable_sdl) TRACE("SDL devices disabled in registry\n");
+-    options.disable_hidraw = check_bus_option(L"DisableHidraw", 1);
++    options.disable_hidraw = check_bus_option(L"DisableHidraw", 0);
+     if (options.disable_hidraw) TRACE("UDEV hidraw devices disabled in registry\n");
+     options.disable_input = check_bus_option(L"DisableInput", 1);
+     if (options.disable_input) TRACE("UDEV input devices disabled in registry\n");

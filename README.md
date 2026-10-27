@@ -924,7 +924,7 @@ shows PlayStation glyphs. `XInputSetState` still rumbles it. The Mythix
 Launcher sets it for Cyberpunk 2077, RDR2, Elden Ring and The Witcher 3.
 `neutron diag` shows the active mode.
 
-On 10.17 (from 10.17-3), xinput has no GE Sony stack. hidraw is on by
+On 10.17 (from 10.17-3) and 11.11 (from 11.11-3), xinput has no GE Sony stack. hidraw is on by
 default, as in Proton. A hidraw pad stays plain HID, and xinput opens it in
 slot 0 when no other XInput pad is there.
 `MYTHIX_DS4_GLYPHS=1` works the same way as on 11.19.
@@ -943,6 +943,8 @@ automatically. The patch system below is for your own custom patches.
   Valve's stock xinput. The 11.19 profile carries its own xinput patch instead.
 - `mythix-ds4-10`: both DS4 layers for the proton_10.0 tree (mythix-10.17):
   the winebus patch rebased, and Luna's xinput work ported to 10.0's xinput.
+- `mythix-ds4-11.11`: both DS4 layers for the mythix-11.11 tree: the winebus
+  patch rebased, and the 11.0-line xinput patch as is.
 - `custom/`: an empty template.
 
 Drop your own `.patch` files into `custom/` (or any new subdirectory) and the

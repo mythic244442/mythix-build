@@ -1,0 +1,311 @@
+Mythix DualShock 4 support for xinput (Neutron 11.0 line)
+=========================================================
+
+Origin : Luna's in-tree edits to the Neutron-11.0-21199 source
+         (~/.local/share/mythix-neutron_builder/src/proton-wine-experimental,
+          Valve wine 66ee546cbea4b569870cb80866d3a953d5af23ec, 2026-10-05 18:51).
+         These are the xinput1_3/1_4/9_1_0 DLLs that give Neutron-11.0-21199 its
+         DS4 rumble and glyph behaviour. Kept verbatim.
+Applies: Valve's stock xinput (66ee546 and the 11.19 base have the same file).
+         NOT the mythix-11.19 GE tree, whose xinput carries GE's Sony stack;
+         that profile uses profiles/mythix-11.19/patches/0003 instead.
+
+What it does (dlls/xinput1_3/main.c, shared by xinput1_1..1_4 and xinputuap):
+  * Sony direct path: when XInput slot 0 is empty, open the first Sony (VID 054c)
+    raw HID device and translate its USB input report into XInput state;
+    XInputSetState sends rumble as a USB output report 0x05.
+  * MYTHIX_DS4_GLYPHS=1: Sony controllers report "not connected" to
+    XInputGetState(Ex), so games with native PlayStation support use HID
+    (PlayStation glyphs, native rumble).
+  * records each controller's vendor ID.
+dlls/xinput9_1_0/Makefile.in: Luna's build of xinput9_1_0 from ../xinput1_3.
+
+Known limits of the direct path (only used without MYTHIX_DS4_GLYPHS=1):
+  * reads are blocking and take the oldest queued report, so input can lag when
+    the game polls slower than the pad reports (~250 Hz);
+  * only the USB report layout (0x01 in, 0x05 out) is handled, not Bluetooth (0x11).
+---
+diff --git a/dlls/xinput1_3/main.c b/dlls/xinput1_3/main.c
+index 47db340..d6bf98e 100644
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -59,6 +59,8 @@ struct xinput_controller
+     WCHAR device_path[MAX_PATH];
+     HANDLE read_event;
+     BOOL enabled;
++    WORD vendor_id;
++    BOOL is_sony_direct;
+ 
+     struct
+     {
+@@ -336,6 +338,147 @@ static void controller_destroy(struct xinput_controller *controller, BOOL alread
+     }
+ }
+ 
++#define SONY_VID 0x054C
++
++static BOOL sony_glyph_mode = FALSE;
++static BOOL sony_glyph_mode_checked = FALSE;
++
++static BOOL check_sony_glyph_mode(void)
++{
++    if (!sony_glyph_mode_checked)
++    {
++        const char *val = getenv("MYTHIX_DS4_GLYPHS");
++        sony_glyph_mode = (val && val[0] == '1');
++        sony_glyph_mode_checked = TRUE;
++    }
++    return sony_glyph_mode;
++}
++
++static DWORD DS4_get_state(struct xinput_controller *controller, XINPUT_STATE *state)
++{
++    BYTE buf[64];
++    BYTE dpad, buttons1, buttons2, buttons3;
++    static DWORD packet = 0;
++    DWORD bytes_read = 0;
++
++    memset(buf, 0, sizeof(buf));
++    if (!ReadFile(controller->device, buf, sizeof(buf), &bytes_read, NULL) || bytes_read < 10)
++        return ERROR_DEVICE_NOT_CONNECTED;
++
++    memset(&state->Gamepad, 0, sizeof(state->Gamepad));
++
++    state->Gamepad.sThumbLX = (SHORT)(((int)buf[1] - 128) << 8);
++    state->Gamepad.sThumbLY = (SHORT)(((int)127 - buf[2]) << 8);
++    state->Gamepad.sThumbRX = (SHORT)(((int)buf[3] - 128) << 8);
++    state->Gamepad.sThumbRY = (SHORT)(((int)127 - buf[4]) << 8);
++    state->Gamepad.bLeftTrigger  = buf[8];
++    state->Gamepad.bRightTrigger = buf[9];
++
++    dpad = buf[5] & 0x0F;
++    buttons1 = (buf[5] >> 4) & 0x0F;
++    buttons2 = buf[6];
++    buttons3 = buf[7];
++
++    switch (dpad)
++    {
++    case 0: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_UP; break;
++    case 1: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_RIGHT; break;
++    case 2: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_RIGHT; break;
++    case 3: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_RIGHT; break;
++    case 4: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_DOWN; break;
++    case 5: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_DOWN | XINPUT_GAMEPAD_DPAD_LEFT; break;
++    case 6: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_LEFT; break;
++    case 7: state->Gamepad.wButtons |= XINPUT_GAMEPAD_DPAD_UP | XINPUT_GAMEPAD_DPAD_LEFT; break;
++    }
++
++    if (buttons1 & 0x01) state->Gamepad.wButtons |= XINPUT_GAMEPAD_X;
++    if (buttons1 & 0x02) state->Gamepad.wButtons |= XINPUT_GAMEPAD_A;
++    if (buttons1 & 0x04) state->Gamepad.wButtons |= XINPUT_GAMEPAD_B;
++    if (buttons1 & 0x08) state->Gamepad.wButtons |= XINPUT_GAMEPAD_Y;
++
++    if (buttons2 & 0x01) state->Gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
++    if (buttons2 & 0x02) state->Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
++    if (buttons2 & 0x10) state->Gamepad.wButtons |= XINPUT_GAMEPAD_BACK;
++    if (buttons2 & 0x20) state->Gamepad.wButtons |= XINPUT_GAMEPAD_START;
++    if (buttons2 & 0x40) state->Gamepad.wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
++    if (buttons2 & 0x80) state->Gamepad.wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;
++
++    if (buttons3 & 0x01) state->Gamepad.wButtons |= XINPUT_GAMEPAD_GUIDE;
++
++    state->dwPacketNumber = ++packet;
++    return ERROR_SUCCESS;
++}
++
++static DWORD DS4_set_state(struct xinput_controller *controller, XINPUT_VIBRATION *state)
++{
++    BYTE buf[32];
++    BOOL ret;
++
++    memset(buf, 0, sizeof(buf));
++    buf[0] = 0x05;
++    buf[1] = 0x01;
++    buf[4] = (BYTE)(state->wRightMotorSpeed >> 8);
++    buf[5] = (BYTE)(state->wLeftMotorSpeed >> 8);
++
++    controller->vibration = *state;
++    ret = HidD_SetOutputReport(controller->device, buf, sizeof(buf));
++    if (!ret) WARN("DS4 rumble failed, error %lu\n", GetLastError());
++    return ERROR_SUCCESS;
++}
++
++static void try_add_sony_hid(void)
++{
++    char buffer[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + MAX_PATH * sizeof(WCHAR)];
++    SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)buffer;
++    SP_DEVICE_INTERFACE_DATA iface = {sizeof(iface)};
++    HIDD_ATTRIBUTES attr;
++    GUID hid_guid;
++    HDEVINFO set;
++    HANDLE dev;
++    DWORD idx;
++    int slot;
++
++    for (slot = 0; slot < XUSER_MAX_COUNT; slot++)
++        if (!controllers[slot].device && !controllers[slot].is_sony_direct) break;
++    if (slot >= XUSER_MAX_COUNT) return;
++
++    HidD_GetHidGuid(&hid_guid);
++    set = SetupDiGetClassDevsW(&hid_guid, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
++    detail->cbSize = sizeof(*detail);
++
++    for (idx = 0; SetupDiEnumDeviceInterfaces(set, NULL, &hid_guid, idx, &iface); idx++)
++    {
++        if (!SetupDiGetDeviceInterfaceDetailW(set, &iface, detail, sizeof(buffer), NULL, NULL))
++            continue;
++
++        if (wcsstr(detail->DevicePath, L"&ig_") || wcsstr(detail->DevicePath, L"&IG_") ||
++            wcsstr(detail->DevicePath, L"&xi_") || wcsstr(detail->DevicePath, L"&XI_"))
++            continue;
++
++        dev = CreateFileW(detail->DevicePath, GENERIC_READ | GENERIC_WRITE,
++                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
++        if (dev == INVALID_HANDLE_VALUE) continue;
++
++        attr.Size = sizeof(attr);
++        attr.Size = sizeof(attr);
++        if (!HidD_GetAttributes(dev, &attr)) { CloseHandle(dev); continue; }
++        if (attr.VendorID == SONY_VID)
++        {
++            TRACE("Sony direct controller VID=%04x PID=%04x at index %d\n",
++                  attr.VendorID, attr.ProductID, slot);
++            controllers[slot].device = dev;
++            controllers[slot].vendor_id = SONY_VID;
++            controllers[slot].is_sony_direct = TRUE;
++            controllers[slot].enabled = TRUE;
++            lstrcpynW(controllers[slot].device_path, detail->DevicePath, MAX_PATH);
++            SetupDiDestroyDeviceInfoList(set);
++            return;
++        }
++        CloseHandle(dev);
++    }
++    SetupDiDestroyDeviceInfoList(set);
++}
++
+ /* enable an opened controller, xinput_cs must be held */
+ static BOOL controller_enable(struct xinput_controller *controller)
+ {
+@@ -443,6 +586,7 @@ static BOOL open_device_at_index(const WCHAR *device_path, int index)
+ {
+     SP_DEVICE_INTERFACE_DATA iface = {sizeof(iface)};
+     PHIDP_PREPARSED_DATA preparsed;
++    HIDD_ATTRIBUTES attr;
+     HIDP_CAPS caps;
+     NTSTATUS status;
+     HANDLE device;
+@@ -451,6 +595,12 @@ static BOOL open_device_at_index(const WCHAR *device_path, int index)
+                          NULL, OPEN_EXISTING, FILE_FLAG_OVERLAPPED | FILE_FLAG_NO_BUFFERING, NULL);
+     if (device == INVALID_HANDLE_VALUE) return TRUE;
+ 
++    attr.Size = sizeof(attr);
++    if (HidD_GetAttributes(device, &attr))
++        controllers[index].vendor_id = attr.VendorID;
++    else
++        controllers[index].vendor_id = 0;
++
+     preparsed = NULL;
+     if (!HidD_GetPreparsedData(device, &preparsed))
+         WARN("ignoring HID device, HidD_GetPreparsedData failed with error %lu\n", GetLastError());
+@@ -467,7 +617,7 @@ static BOOL open_device_at_index(const WCHAR *device_path, int index)
+         WARN("ignoring HID device, failed to initialize\n");
+     else
+     {
+-        TRACE("opened device %s at index %u\n", debugstr_w(device_path), index);
++        TRACE("opened device %s at index %u (VID=%04x)\n", debugstr_w(device_path), index, attr.VendorID);
+         return TRUE;
+     }
+ 
+@@ -549,6 +699,9 @@ static void update_controller_list(void)
+ 
+     SetupDiDestroyDeviceInfoList(set);
+ 
++    if (!controllers[0].device && !controllers[0].is_sony_direct)
++        try_add_sony_hid();
++
+     LeaveCriticalSection(&xinput_cs);
+ }
+ 
+@@ -833,11 +986,13 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputSetState(DWORD index, XINPUT_VIBRATION *vib
+     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+ 
+     EnterCriticalSection(&xinput_cs);
+-    if (!controllers[index].device) update_controller_list();
+-    if (!controllers[index].device)
++    if (!controllers[index].device && !controllers[index].is_sony_direct) update_controller_list();
++    if (!controllers[index].device && !controllers[index].is_sony_direct)
+         ret = ERROR_DEVICE_NOT_CONNECTED;
+     else if (WaitForSingleObject(steam_overlay_event, 0) == WAIT_OBJECT_0)
+         ret = ERROR_SUCCESS;
++    else if (controllers[index].is_sony_direct)
++        ret = DS4_set_state(&controllers[index], vibration);
+     else
+         ret = HID_set_state(&controllers[index], vibration);
+     LeaveCriticalSection(&xinput_cs);
+@@ -850,6 +1005,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputSetState(DWORD index, XINPUT_VIBRATION *vib
+ static DWORD xinput_get_state(DWORD index, XINPUT_STATE *state)
+ {
+     DWORD ret;
++    const char *sgi;
+ 
+     if (!state) return ERROR_BAD_ARGUMENTS;
+ 
+@@ -857,14 +1013,34 @@ static DWORD xinput_get_state(DWORD index, XINPUT_STATE *state)
+ 
+     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+ 
++    if (controllers[index].is_sony_direct)
++    {
++        if (check_sony_glyph_mode())
++            return ERROR_DEVICE_NOT_CONNECTED;
++        return DS4_get_state(&controllers[index], state);
++    }
++
+     ret = get_current_state(index, state) ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;
+-    if (ret == ERROR_SUCCESS) goto done;
++    if (ret == ERROR_SUCCESS) goto check_sony;
++    sgi = getenv("SteamGameId");
++    if (sgi && !strcmp(sgi, "298110")) goto done;
+ 
+     EnterCriticalSection(&xinput_cs);
+     update_controller_list();
++    if (controllers[index].is_sony_direct)
++    {
++        LeaveCriticalSection(&xinput_cs);
++        if (check_sony_glyph_mode())
++            return ERROR_DEVICE_NOT_CONNECTED;
++        return DS4_get_state(&controllers[index], state);
++    }
+     ret = get_current_state(index, state) ? ERROR_SUCCESS : ERROR_DEVICE_NOT_CONNECTED;
+     LeaveCriticalSection(&xinput_cs);
+ 
++check_sony:
++    if (ret == ERROR_SUCCESS && controllers[index].vendor_id == 0x054C && check_sony_glyph_mode())
++        return ERROR_DEVICE_NOT_CONNECTED;
++
+ done:
+     if (ret == ERROR_SUCCESS && WaitForSingleObject(steam_overlay_event, 0) == WAIT_OBJECT_0)
+         memset(state, 0, sizeof(*state));
+@@ -1168,8 +1344,8 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilitiesEx(DWORD unk, DWORD index, D
+     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
+ 
+     EnterCriticalSection(&xinput_cs);
+-    if (!controllers[index].device) update_controller_list();
+-    if (!controllers[index].device)
++    if (!controllers[index].device && !controllers[index].is_sony_direct) update_controller_list();
++    if (!controllers[index].device && !controllers[index].is_sony_direct)
+         ret = ERROR_DEVICE_NOT_CONNECTED;
+     else if (!HidD_GetAttributes(controllers[index].device, &attr))
+         ret = ERROR_DEVICE_NOT_CONNECTED;
+diff --git a/dlls/xinput9_1_0/Makefile.in b/dlls/xinput9_1_0/Makefile.in
+index fe89cfc..2d4d54b 100644
+--- a/dlls/xinput9_1_0/Makefile.in
++++ b/dlls/xinput9_1_0/Makefile.in
+@@ -1,4 +1,7 @@
++EXTRADEFS = -DXINPUT_VER=0
+ MODULE    = xinput9_1_0.dll
++IMPORTS   = hid setupapi advapi32 user32
++PARENTSRC = ../xinput1_3
+ 
+ SOURCES = \
+ 	main.c \
