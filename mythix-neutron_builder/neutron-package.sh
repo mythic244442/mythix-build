@@ -624,30 +624,65 @@ fi
 #  Write a minimal README inside the package
 # ══════════════════════════════════════════════════════════════════════════════
 sep "Writing package README"
+_readme_bridge="downloaded fallback"
+[ "${NEUTRON_STEAM_BRIDGE:-}" = "ge" ] && _readme_bridge="built in-tree (GE lsteamclient + steam.exe)"
+_readme_display="X11"
+[ "${NEUTRON_PROFILE_WAYLAND:-}" = "1" ] && _readme_display="Wayland-first"
+_readme_dir="$(basename "$NEUTRON_PACKAGE_DIR")"
 cat > "${NEUTRON_PACKAGE_DIR}/README.md" << EOF
-# ${BUILD_NAME}
+# ◈ ${_display_name} ◈
 
-Built by **mythix-neutron_builder**.
+A Steam compatibility tool in Proton's format: **Mythix Wine** with bundled DXVK and
+VKD3D-Proton, driven by **Neutron**, a Python launcher that handles prefixes, translation
+layers, Steam, VR, NVIDIA and Sony controllers around Wine.
 
-| Component       | Status                                       |
-|-----------------|----------------------------------------------|
-| proton-wine     | ${_wine_ver}                                 |
-| DXVK            | ${DXVK_SOURCE_KEY}                           |
-| VKD3D-Proton    | ${VKD3D_SOURCE_KEY}                          |
+| | |
+|---|---|
+| Wine            | ${_wine_ver} |
+| Profile         | ${NEUTRON_PROFILE:-none} (${NEUTRON_BUILD_MODE:-classic}) |
+| Display         | ${_readme_display} |
+| Steam Runtime   | ${STEAM_RUNTIME_LABEL_VALUE:-none} |
+| Steam bridge    | ${_readme_bridge} |
+| DXVK            | ${DXVK_SOURCE_KEY} |
+| VKD3D-Proton    | ${VKD3D_SOURCE_KEY} |
+
+\`build-info\` and \`mythix-source.lock\` list the exact upstream commits this build used.
 
 ## Installation
 
 Copy this directory into Steam's compatibility tools folder and restart Steam:
 
 \`\`\`bash
-cp -r "$(basename "$NEUTRON_PACKAGE_DIR")" ~/.steam/steam/compatibilitytools.d/
+mkdir -p ~/.steam/steam/compatibilitytools.d
+cp -r "${_readme_dir}" ~/.steam/steam/compatibilitytools.d/
 \`\`\`
 
-Then open a game's Properties → Compatibility and select **${_display_name}**.
+Then open a game's **Properties → Compatibility**, tick *Force the use of a specific Steam
+Play compatibility tool* and pick **${_display_name}**.
 
-## Built with
+## PlayStation controllers
 
-- [mythix-neutron_builder](https://github.com/blu2442/mythix-neutron_builder)
+DualShock 4 pads are driven directly over hidraw (rumble, LED, haptics). For PlayStation
+button glyphs in XInput games, turn Steam Input off for the game and use the launch options:
+
+\`\`\`
+MYTHIX_DS4_GLYPHS=1 %command%
+\`\`\`
+
+## Checking the build
+
+\`\`\`bash
+~/.steam/steam/compatibilitytools.d/${_readme_dir}/neutron diag
+\`\`\`
+
+prints the full launch configuration without starting a game; include it in bug reports.
+\`NEUTRON_LOG=1\` writes a launch log and \`NEUTRON_CONFIG=wined3d\` uses WineD3D instead of DXVK.
+
+## Source
+
+Built by [mythix-build](https://github.com/mythic244442/mythix-build) (GPL-2.0), on the
+work of Wine, Valve's Proton, wine-tkg / Kron4ek, wine-staging, GE-Proton, DXVK and
+VKD3D-Proton.
 EOF
 ok "README written"
 
