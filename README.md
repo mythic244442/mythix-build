@@ -125,9 +125,6 @@ proton-install
 neutron-install
 ```
 ```bash
-wine_toolz
-```
-```bash
 wine-proton_hybrid
 ```
 ```bash
