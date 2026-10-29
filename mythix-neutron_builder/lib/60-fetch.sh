@@ -34,6 +34,13 @@ fetch_source() {
             msg "Updating: $dest"
             run git -C "$dest" fetch origin
             if [ -n "$branch" ]; then
+                # A previous build can leave regenerated tracked files (e.g. .spec
+                # files from make_specfiles) that would block the checkout.
+                # Stash rather than discard so nothing is lost.
+                if [ -n "$(git -C "$dest" status --porcelain --untracked-files=no)" ]; then
+                    warn "Uncommitted changes in $dest (likely left by a previous build) — stashing"
+                    run git -C "$dest" stash push -m "mythix-build: leftovers before checkout $branch"
+                fi
                 run git -C "$dest" checkout "$branch"
                 run git -C "$dest" pull --ff-only origin "$branch" 2>/dev/null || true
             else
