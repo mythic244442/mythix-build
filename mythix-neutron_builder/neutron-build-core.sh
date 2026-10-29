@@ -479,7 +479,9 @@ if [ -d "${PATCH_DIR}" ]; then
     done
     shopt -u nullglob
     if [ "$_patched" -eq 0 ]; then
-        msg2 "No patches found in ${PATCH_DIR}"
+        # patch groups and profile patches were applied earlier, by the
+        # source pipeline; this step only takes loose files in patches/
+        msg2 "No loose .patch/.diff files in ${PATCH_DIR} — nothing extra to apply"
     else
         ok "$_patched patch(es) applied"
     fi
