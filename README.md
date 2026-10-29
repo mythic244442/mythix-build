@@ -942,6 +942,10 @@ automatically. The patch system below is for your own custom patches.
   the winebus patch rebased, and Luna's xinput work ported to 10.0's xinput.
 - `mythix-ds4-11.11`: both DS4 layers for the mythix-11.11 tree: the winebus
   patch rebased, and the 11.0-line xinput patch as is.
+- `mythix-wayland-first`: explorer tries winewayland before winex11 and reads
+  `WINE_GRAPHICS_DRIVER`, as GE's Wine does. Without a Wayland session
+  winewayland fails to start and Wine falls back to X11. Used by mythix-10.17
+  and mythix-11.11; mythix-11.19 gets the same behaviour from GE.
 - `custom/`: an empty template.
 
 Drop your own `.patch` files into `custom/` (or any new subdirectory) and the

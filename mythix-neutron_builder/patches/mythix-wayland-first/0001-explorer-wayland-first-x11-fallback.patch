@@ -1,0 +1,37 @@
+From: Mythix <builder@mythix.invalid>
+Subject: [PATCH] explorer: Wayland first, X11 fallback; honor WINE_GRAPHICS_DRIVER
+
+Upstream Wine tries x11 before wayland, so on a Wayland desktop XWayland
+always wins and winewayland is never used. Try wayland first: when there is
+no Wayland session, winewayland fails to initialize and explorer moves on
+to x11, so X11 desktops are unaffected.
+
+Also let WINE_GRAPHICS_DRIVER override the driver list, as Proton/GE do,
+so Neutron can force a driver per launch (NEUTRON_WAYLAND=0 -> x11).
+---
+diff --git a/programs/explorer/desktop.c b/programs/explorer/desktop.c
+--- a/programs/explorer/desktop.c
++++ b/programs/explorer/desktop.c
+@@ -40,7 +40,8 @@
+ #define DESKTOP_CLASS_ATOM ((LPCWSTR)MAKEINTATOM(32769))
+ #define DESKTOP_ALL_ACCESS 0x01ff
+ 
+-static const WCHAR default_driver[] = L"mac,x11,wayland";
++/* Mythix: Wayland first, X11 when there is no Wayland session to connect to */
++static const WCHAR default_driver[] = L"mac,wayland,x11";
+ 
+ static BOOL using_root = TRUE;
+ 
+@@ -1015,6 +1016,12 @@
+             RegQueryValueExW( hkey, L"Graphics", 0, NULL, (LPBYTE)buffer, &count );
+             RegCloseKey( hkey );
+         }
++        /* Mythix: WINE_GRAPHICS_DRIVER overrides the list, as in Proton/GE */
++        {
++            WCHAR env[MAX_PATH];
++            DWORD len = GetEnvironmentVariableW( L"WINE_GRAPHICS_DRIVER", env, ARRAY_SIZE( env ) );
++            if (len && len < ARRAY_SIZE( env )) lstrcpyW( buffer, env );
++        }
+     }
+     else lstrcpynW( buffer, driver, ARRAY_SIZE( buffer ));
+ 

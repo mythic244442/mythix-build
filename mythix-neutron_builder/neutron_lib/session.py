@@ -106,7 +106,8 @@ class Session:
                 # Wayland-first builds would still pick winewayland on their own
                 env.setdefault("WINE_GRAPHICS_DRIVER", "x11")
             return
-        env.setdefault("WINE_GRAPHICS_DRIVER", "wayland")
+        # x11 after wayland: explorer falls back to it if winewayland fails
+        env.setdefault("WINE_GRAPHICS_DRIVER", "wayland,x11")
         env.setdefault("WINE_USE_EGL", "1")                 # OpenGL on winewayland
         env.setdefault("WINE_DISABLE_FULLSCREEN_HACK", "1") # FSHack is X11-only
         env.setdefault("WINE_MOVE_HACK", "1")

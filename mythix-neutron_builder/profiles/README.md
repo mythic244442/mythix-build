@@ -26,8 +26,8 @@ Explicit flags still win over the profile: `--name`, `--patches` and `--build-mo
 | Profile | Pipeline | Mode | Package | What it is |
 |---|---|---|---|---|
 | `mythix-11.19` | `patch` | wow64 | `Mythix-Neutron-11.19-4` | Valve bleeding-edge + GE (incl. Wayland) + curated TkG 11.19 + DS4. Wayland-first. |
-| `mythix-11.11` | `legacy` | classic | `Mythix-Neutron-11.11-2` | Safety net. A *reconstructed* recipe of the last X11-first bleeding-edge build. |
-| `mythix-10.17` | `legacy` | classic | `Mythix-Neutron-10.17-2` | **Frozen.** The esync/fsync build on Valve proton_10.0. Never edit it. |
+| `mythix-11.11` | `legacy` | classic | `Mythix-Neutron-11.11-5` | Safety net. A *reconstructed* recipe of the July bleeding-edge build + Steam bridge + DS4. Wayland-first. |
+| `mythix-10.17` | `legacy` | classic | `Mythix-Neutron-10.17-4` | **Frozen** Wine recipe: the esync/fsync build on Valve proton_10.0, + Steam bridge, DS4, Wayland-first. |
 
 Rebuilds of an existing build get a new revision number (`-2`, `-3`, …). Installed
 packages in `compatibilitytools.d` are never overwritten by a profile build.
