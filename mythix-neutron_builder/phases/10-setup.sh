@@ -11,10 +11,16 @@ if [ -n "${_KRON4EK_REDIST_BUILD:-}" ]; then
 fi
 
 # ── Build profile (--profile) ────────────────────────────────────────────────
-# If no --profile and no --source were given, use the default profile
+# Nothing given on the command line:
+#   - interactive terminal → show the build-target menu (profiles + sources)
+#   - non-interactive (CI)  → fall back to the default profile
 if [ -z "$PROFILE_NAME" ] && [ -z "$WINE_SOURCE_KEY" ]; then
-    PROFILE_NAME="$DEFAULT_PROFILE"
-    msg "No --profile or --source given — using default profile: ${DEFAULT_PROFILE}"
+    if [ -t 0 ]; then
+        pick_build_target
+    else
+        PROFILE_NAME="$DEFAULT_PROFILE"
+        msg "No --profile or --source given — using default profile: ${DEFAULT_PROFILE}"
+    fi
 fi
 [ -z "$PROFILE_NAME" ] || _load_profile "$PROFILE_NAME"
 

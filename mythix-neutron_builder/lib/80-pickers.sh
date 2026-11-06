@@ -1,4 +1,77 @@
 # ══════════════════════════════════════════════════════════════════════════════
+#  Build-target menu  — shown on a bare interactive run (no --profile/--source)
+#
+#  Lists the release profiles first (the recommended path — they carry the
+#  patch groups, Steam bridge and Wayland config) and then the raw Wine
+#  sources, in one picker.  Sets PROFILE_NAME or WINE_SOURCE_KEY; the caller
+#  loads the profile / validates the source afterwards, as with the CLI flags.
+# ══════════════════════════════════════════════════════════════════════════════
+pick_build_target() {
+    section "Build target"
+
+    # Gather "key<TAB>label" rows: profiles (profile:<name>) then sources.
+    local -a rows=()
+    local conf name desc
+    for conf in "${PROFILES_DIR}"/*/profile.conf; do
+        [ -f "$conf" ] || continue
+        name="$(basename "$(dirname "$conf")")"
+        desc="$(
+            unset "${_PROFILE_VARS[@]}"
+            # shellcheck source=/dev/null
+            . "$conf"
+            printf '%s' "${PROFILE_DESC:-Mythix Wine profile}"
+        )"
+        local tag="profile"
+        [ "$name" = "$DEFAULT_PROFILE" ] && tag="profile*"
+        rows+=( "profile:${name}"$'\t'"[${tag}] ${name} — ${desc}" )
+    done
+    local k
+    for k in "${WINE_SOURCE_KEYS[@]}"; do
+        rows+=( "source:${k}"$'\t'"[source]  ${k} — ${WINE_SOURCE_DESC[$k]}" )
+    done
+
+    local picked key
+    if command -v fzf >/dev/null 2>&1; then
+        picked=$(
+            printf '%s\n' "${rows[@]}" \
+            | fzf \
+                --prompt="Build target > " \
+                --header="Select a release profile (recommended) or a raw Wine source  —  * = default" \
+                --with-nth=2 \
+                --delimiter=$'\t' \
+                --height=40% \
+                --border \
+            || true
+        )
+        [ -n "$picked" ] || err "No build target selected."
+        key="${picked%%$'\t'*}"
+    else
+        printf "\n  ${C_B}Select a build target${C_R} ${C_DIM}(profiles recommended; * = default)${C_R}\n\n"
+        PS3="  Target: "
+        local -a labels=() keys=()
+        for k in "${rows[@]}"; do
+            keys+=( "${k%%$'\t'*}" )
+            labels+=( "${k#*$'\t'}" )
+        done
+        local choice i
+        select choice in "${labels[@]}"; do
+            [ -z "$choice" ] && continue
+            for i in "${!labels[@]}"; do
+                [ "${labels[$i]}" = "$choice" ] && key="${keys[$i]}" && break
+            done
+            [ -n "$key" ] && break
+        done
+        PS3=""
+    fi
+
+    case "$key" in
+        profile:*) PROFILE_NAME="${key#profile:}";     ok "Selected profile: ${PROFILE_NAME}" ;;
+        source:*)  WINE_SOURCE_KEY="${key#source:}";    ok "Selected source: ${WINE_SOURCE_KEY}" ;;
+        *)         err "No build target selected." ;;
+    esac
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  Source menu  — interactive selector when --source is not given
 # ══════════════════════════════════════════════════════════════════════════════
 pick_source() {
